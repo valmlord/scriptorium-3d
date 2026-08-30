@@ -16,9 +16,13 @@ export default typescriptEslint.config(
   },
   js.configs.recommended,
   // Source files use strict type checking
-  ...typescriptEslint.configs.strictTypeChecked.map(cfg => ({
+  ...typescriptEslint.configs.strictTypeChecked.map((cfg) => ({
     ...cfg,
-    files: cfg.files ? (Array.isArray(cfg.files) ? cfg.files : [cfg.files]) : ['src/**/*.ts'],
+    files: cfg.files
+      ? Array.isArray(cfg.files)
+        ? cfg.files
+        : [cfg.files]
+      : ['src/**/*.ts'],
   })),
   {
     files: ['src/**/*.ts'],
@@ -42,7 +46,13 @@ export default typescriptEslint.config(
   },
   // Config files use basic JS rules only, not strict type checking
   {
-    files: ['eslint.config.js', 'vite.config.ts', 'vite.aliases.ts', 'playwright.config.ts', 'commitlint.config.js'],
+    files: [
+      'eslint.config.js',
+      'vite.config.ts',
+      'vite.aliases.ts',
+      'playwright.config.ts',
+      'commitlint.config.js',
+    ],
   },
   // @core layer: nothing but types from other layers, no three, no gsap
   {
@@ -63,7 +73,14 @@ export default typescriptEslint.config(
               allowTypeImports: true,
             },
             {
-              group: ['@worker/*', '@engine/*', '@motion/*', '@state/*', '@ui/*', '@app/*'],
+              group: [
+                '@worker/*',
+                '@engine/*',
+                '@motion/*',
+                '@state/*',
+                '@ui/*',
+                '@app/*',
+              ],
               message: 'other layers may only be imported as types in @core',
               allowTypeImports: true,
             },
@@ -137,7 +154,14 @@ export default typescriptEslint.config(
               allowTypeImports: true,
             },
             {
-              group: ['@core/*', '@worker/*', '@engine/*', '@motion/*', '@state/*', '@app/*'],
+              group: [
+                '@core/*',
+                '@worker/*',
+                '@engine/*',
+                '@motion/*',
+                '@state/*',
+                '@app/*',
+              ],
               message: 'other layers may only be imported as types in @ui',
               allowTypeImports: true,
             },
@@ -164,5 +188,5 @@ export default typescriptEslint.config(
       ],
     },
   },
-  eslintConfigPrettier,
+  eslintConfigPrettier
 );
