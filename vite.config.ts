@@ -14,4 +14,10 @@ export default defineConfig({
   worker: {
     format: 'es',
   },
+  test: {
+    environment: 'node',
+    include: ['src/**/*.test.ts', 'src/**/__tests__/**/*.test.ts'],
+    // e2e belongs to Playwright; Vitest must not try to run those specs.
+    exclude: ['e2e/**', 'node_modules/**', 'dist/**'],
+  },
 });
