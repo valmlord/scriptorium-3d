@@ -17,6 +17,7 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['src/**/*.test.ts', 'src/**/__tests__/**/*.test.ts'],
+    setupFiles: ['src/core/__tests__/fast-check-setup.ts'],
     // e2e belongs to Playwright; Vitest must not try to run those specs.
     exclude: ['e2e/**', 'node_modules/**', 'dist/**'],
     coverage: {
