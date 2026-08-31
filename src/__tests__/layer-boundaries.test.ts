@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { ESLint } from 'eslint';
 import { writeFileSync, rmSync } from 'fs';
 import { resolve } from 'path';
@@ -8,15 +8,25 @@ import { resolve } from 'path';
  * under src/<layer>/. To exercise them we write a throwaway file into each
  * layer directory, lint it through the real ESLint Node API, and clean up.
  */
+// These rules are type-aware, so the first lint builds a TypeScript program for
+// the whole project — seconds, not milliseconds. Under coverage instrumentation
+// that overran the 5 s default and failed the coverage job while `verify`, which
+// runs the same tests uninstrumented, stayed green. The budget is raised here
+// deliberately rather than left to chance.
+vi.setConfig({ testTimeout: 20_000, hookTimeout: 60_000 });
+
 describe('layer boundaries', () => {
   let eslint: ESLint;
   const tempFiles: string[] = [];
 
-  beforeAll(() => {
+  beforeAll(async () => {
     eslint = new ESLint({
       baseConfig: undefined,
       overrideConfigFile: './eslint.config.js',
     });
+    // Pay for building the type-aware program once, inside a hook with its own
+    // budget, so no individual test carries the warm-up cost and times out.
+    await lintInLayer('core', 'export const warmUp = 0;\n');
   });
 
   afterAll(() => {
