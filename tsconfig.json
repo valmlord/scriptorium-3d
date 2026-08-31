@@ -16,15 +16,17 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
-    "baseUrl": ".",
+    // No baseUrl on purpose: it is deprecated and stops working in TypeScript
+    // 7. Without it, every path mapping is resolved relative to this file,
+    // which is why each entry is written as an explicit "./" relative path.
     "paths": {
-      "@core/*": ["src/core/*"],
-      "@worker/*": ["src/worker/*"],
-      "@engine/*": ["src/engine/*"],
-      "@motion/*": ["src/motion/*"],
-      "@state/*": ["src/state/*"],
-      "@ui/*": ["src/ui/*"],
-      "@app/*": ["src/app/*"]
+      "@core/*": ["./src/core/*"],
+      "@worker/*": ["./src/worker/*"],
+      "@engine/*": ["./src/engine/*"],
+      "@motion/*": ["./src/motion/*"],
+      "@state/*": ["./src/state/*"],
+      "@ui/*": ["./src/ui/*"],
+      "@app/*": ["./src/app/*"]
     }
   },
   "include": ["src"],
