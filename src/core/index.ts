@@ -8,3 +8,4 @@ export * from './bignum';
 export * from './address';
 export * from './prf';
 export * from './feistel';
+export * from './library';
