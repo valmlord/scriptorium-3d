@@ -4,6 +4,8 @@ dist-ssr/
 coverage/
 playwright-report/
 test-results/
+# Local tooling configuration. The engineering documentation it used to hold
+# now lives in docs/ and CONTRIBUTING.md, where a reader expects it.
 .claude/
 *.local
 
