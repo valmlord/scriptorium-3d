@@ -1,5 +1,4 @@
-import { bench, describe, it, expect } from 'vitest';
-import { performance } from 'node:perf_hooks';
+import { bench, describe } from 'vitest';
 import { PAGE_ALPHABET } from '../alphabet';
 import { digitsToInt, intToDigits } from '../bignum';
 
@@ -10,10 +9,10 @@ import { digitsToInt, intToDigits } from '../bignum';
  * margin is wide because CI machines are not reference machines — the point is
  * to catch an accidental O(n²) radix conversion, not to police microseconds.
  *
- * The `bench` below reports the number for humans. The `it` test is the
- * assertion: vitest's bench runner does not surface per-task hooks, so a
- * genuine threshold check lives in a normal test that times the round-trip
- * directly.
+ * This file reports the number for humans. The assertion lives in
+ * `performance.test.ts`: `vitest run` does not collect `.bench.ts` files and
+ * `vitest bench` does not run `it` tasks, so an `expect` written here would
+ * execute in neither mode.
  */
 describe('bignum round-trip', () => {
   bench(
@@ -24,14 +23,4 @@ describe('bignum round-trip', () => {
     },
     { time: 100 }
   );
-
-  it('a full 3200-character round-trip stays under 5 ms', () => {
-    const text = 'а'.repeat(3200);
-    const start = performance.now();
-    const value = digitsToInt(text, PAGE_ALPHABET);
-    const roundTripped = intToDigits(value, PAGE_ALPHABET, 3200);
-    const elapsed = performance.now() - start;
-    expect(roundTripped).toBe(text);
-    expect(elapsed).toBeLessThan(5);
-  });
 });
