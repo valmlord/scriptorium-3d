@@ -17,9 +17,22 @@ base 36, is the page. Because the network is a permutation of exactly that domai
 turns any text into the one address where it lives. That is the entire search feature: not an index, an
 inverse.
 
+## Documentation
+
+| Document | What it holds |
+|---|---|
+| [SPEC.md](.claude/plans/SPEC.md) | Source of truth: the alphabet, the address model, the cipher, the URL scheme, the public API |
+| [DECISIONS.md](.claude/plans/DECISIONS.md) | Architecture decision records, including the alternatives that lost |
+| [ROADMAP.md](.claude/plans/ROADMAP.md) | Milestones, each with its tests and the question it has to answer before it closes |
+| [rules/](.claude/rules/) | Layer invariants, code quality, testing strategy, commit conventions |
+
+Worth reading first if you only read one: ADR-0002 on why the bijection is a Feistel network rather than
+the modular multiplication the original library uses, and ADR-0003 on why the format is frozen.
+
 ## Status
 
-Work in progress.
+Work in progress. M0 (tooling with enforced layer boundaries) and M1 (alphabet, radix codec, address
+model) are merged; the cipher itself is next.
 
 ## License
 
