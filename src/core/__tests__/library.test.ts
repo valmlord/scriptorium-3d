@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import fc from 'fast-check';
+import { propertyRuns } from './property-runs';
 import {
   BOOKS_PER_SHELF,
   LIBRARY_SIZE,
@@ -118,7 +119,7 @@ describe('getPage', () => {
       fc.property(validAddress, (address) => {
         expect(getPage(address)).toHaveLength(PAGE_LENGTH);
       }),
-      { numRuns: 120 }
+      { numRuns: propertyRuns(120) }
     );
   });
 
@@ -129,7 +130,7 @@ describe('getPage', () => {
           expect(PAGE_ALPHABET.digitBySymbol.has(character)).toBe(true);
         }
       }),
-      { numRuns: 40 }
+      { numRuns: propertyRuns(40) }
     );
   });
 
@@ -208,7 +209,7 @@ describe('the bijection holds in both directions', () => {
         fc.property(validAddress, (address) => {
           expect(locate(getPage(address))).toEqual(address);
         }),
-        { numRuns: 1000 }
+        { numRuns: propertyRuns(1000) }
       );
     },
     PROPERTY_TIMEOUT_MS
@@ -221,7 +222,7 @@ describe('the bijection holds in both directions', () => {
         fc.property(validPage, (page) => {
           expect(getPage(locate(page))).toBe(page);
         }),
-        { numRuns: 1000 }
+        { numRuns: propertyRuns(1000) }
       );
     },
     PROPERTY_TIMEOUT_MS
@@ -340,7 +341,7 @@ describe('search', () => {
             expect(getPage(hit.address).slice(offset, offset + text.length)).toBe(text);
           }
         ),
-        { numRuns: 1000 }
+        { numRuns: propertyRuns(1000) }
       );
     },
     PROPERTY_TIMEOUT_MS

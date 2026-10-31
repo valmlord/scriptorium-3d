@@ -8,16 +8,12 @@ import fc from 'fast-check';
  * counterexample, the shrunk case is added as a named regression test and the
  * seed stays put.
  */
-/**
- * Under Stryker the suite runs once per mutant, so the >= 1000-case property
- * tests are given a smaller budget to keep a mutation run to minutes rather
- * than hours (`vitest.stryker.config.ts`). Fewer cases can only let a mutant
- * survive that more cases would have caught, so the mutation score this
- * produces is a floor, never an inflation. Every other run — `npm run test`,
- * `npm run coverage`, CI — uses the full budget.
- */
-const isMutationRun = process.env.SCRIPTORIUM_STRYKER === '1';
+fc.configureGlobal({ seed: 20260830 });
 
-fc.configureGlobal(
-  isMutationRun ? { seed: 20260830, numRuns: 25 } : { seed: 20260830 }
-);
+/**
+ * Only the seed is configured globally. The per-property case counts are not:
+ * `configureGlobal({ numRuns })` is ignored by any `fc.assert` that passes a
+ * `numRuns` of its own, and every property test here does, so a global cap
+ * would have looked like a budget while enforcing nothing. The counts go
+ * through `propertyRuns` in `./property-runs.ts` instead.
+ */

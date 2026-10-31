@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import fc from 'fast-check';
+import { propertyRuns } from './property-runs';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { LIBRARY_SIZE, PAGE_LENGTH, RADIX } from '../address';
 import {
@@ -142,7 +143,7 @@ describe('toMinimalBytesBE', () => {
       fc.property(fc.bigInt({ min: 1n, max: HALF_DOMAIN - 1n }), (value) => {
         expect(toMinimalBytesBE(value)[0]).not.toBe(0);
       }),
-      { numRuns: 200 }
+      { numRuns: propertyRuns(200) }
     );
   });
 
@@ -151,7 +152,7 @@ describe('toMinimalBytesBE', () => {
       fc.property(fc.bigInt({ min: 0n, max: HALF_DOMAIN - 1n }), (value) => {
         expect(fromBytesBE(toMinimalBytesBE(value))).toBe(value);
       }),
-      { numRuns: 200 }
+      { numRuns: propertyRuns(200) }
     );
   });
 });
@@ -225,7 +226,7 @@ describe('the seed encoding (SPEC §4.3)', () => {
           expect(decodeSeedInput(seedInput(round, half))).toEqual({ round, half });
         }
       ),
-      { numRuns: 200 }
+      { numRuns: propertyRuns(200) }
     );
   });
 
@@ -304,7 +305,7 @@ describe('the round function F (SPEC §4.3)', () => {
           expect(value).toBeLessThan(HALF_DOMAIN);
         }
       ),
-      { numRuns: 60 }
+      { numRuns: propertyRuns(60) }
     );
   });
 

@@ -6,9 +6,11 @@ import baseConfig from './vite.config.ts';
  *
  * Mutation testing re-runs the suite once per mutant, and `src/core` produces
  * close to 600 of them. The property tests that testing.md §2 requires to run
- * at >= 1000 cases take seconds each, which multiplied out is hours, so this
- * configuration asks fast-check for fewer cases — see
- * `src/core/__tests__/fast-check-setup.ts`.
+ * at >= 1000 cases take seconds each, which multiplied out is hours, so the
+ * flag below caps the case count — see `src/core/__tests__/property-runs.ts`,
+ * which reads it. The cap lives there rather than in
+ * `fc.configureGlobal` because a global `numRuns` is ignored by any
+ * `fc.assert` that passes its own, and every property test here does.
  *
  * Fewer cases can only let a mutant **survive** that more cases would have
  * killed, so this lowers the reported mutation score rather than flattering

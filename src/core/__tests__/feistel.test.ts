@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import fc from 'fast-check';
+import { propertyRuns } from './property-runs';
 import { LIBRARY_SIZE, PAGE_LENGTH } from '../address';
 import { ValueOutOfDomainError } from '../errors';
 import { ROUNDS, decrypt, encrypt } from '../feistel';
@@ -28,7 +29,7 @@ describe('the network is a permutation of [0, N)', () => {
       fc.property(linearValue, (value) => {
         expect(decrypt(encrypt(value))).toBe(value);
       }),
-      { numRuns: 120 }
+      { numRuns: propertyRuns(120) }
     );
   });
 
@@ -37,7 +38,7 @@ describe('the network is a permutation of [0, N)', () => {
       fc.property(linearValue, (value) => {
         expect(encrypt(decrypt(value))).toBe(value);
       }),
-      { numRuns: 120 }
+      { numRuns: propertyRuns(120) }
     );
   });
 
@@ -49,7 +50,7 @@ describe('the network is a permutation of [0, N)', () => {
           expect(result).toBeLessThan(LIBRARY_SIZE);
         }
       }),
-      { numRuns: 60 }
+      { numRuns: propertyRuns(60) }
     );
   });
 
