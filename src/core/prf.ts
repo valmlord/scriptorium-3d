@@ -86,6 +86,13 @@ const HEX_PAIRS: string = Array.from({ length: 256 }, (_unused, byte) =>
  */
 export function asciiToBytes(text: string): Uint8Array {
   const bytes = new Uint8Array(text.length);
+  // Stryker disable next-line EqualityOperator: `i <= text.length` is an
+  // equivalent mutant, verified rather than assumed. One extra iteration reads
+  // `charCodeAt(text.length)`, which is NaN; `NaN > 0x7f` is false, so the
+  // guard does not fire; and `bytes[text.length] = NaN` is an out-of-bounds
+  // write on a Uint8Array, which is silently discarded. The returned bytes are
+  // identical for every input, so no test can distinguish the two (testing.md
+  // §4).
   for (let i = 0; i < text.length; i++) {
     const code = text.charCodeAt(i);
     if (code > 0x7f) {

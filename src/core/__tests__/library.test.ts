@@ -17,6 +17,7 @@ import {
 } from '../address';
 import { PAGE_ALPHABET, digitToSymbol, normalize } from '../alphabet';
 import { intToDigits } from '../bignum';
+import { toMinimalBytesBE } from '../prf';
 import {
   AddressBeyondLibraryError,
   InvalidPageLengthError,
@@ -37,6 +38,9 @@ import {
 } from '../library';
 
 const SPACE = digitToSymbol(PAGE_ALPHABET, 0);
+
+/** Bytes in one `randomAddress` draw: ceil(bitlength(36^3200) / 8). */
+const LIBRARY_SIZE_BYTE_LENGTH = Math.ceil(LIBRARY_SIZE.toString(2).length / 8);
 
 /**
  * A property test over 1000 cases of a 16544-bit permutation is seconds of
@@ -450,8 +454,14 @@ describe('search', () => {
   });
 
   it('refuses characters outside the alphabet, naming all of them', () => {
+    // The offset must not be 0. `locate` rejects the same characters further
+    // down, reporting their positions in the 3200-character page; at offset 0
+    // those coincide with their positions in the query, so this test would
+    // pass with the query validation removed entirely. At offset 1000 the two
+    // differ by 1000, and only query-relative positions satisfy it — which is
+    // what a caller highlighting the user's own input needs.
     try {
-      search('кoтq', 'spaces', 0);
+      search('кoтq', 'spaces', 1000);
       expect.unreachable('search should have refused Latin homoglyphs');
     } catch (error) {
       expect(error).toBeInstanceOf(UnknownSymbolError);
@@ -531,6 +541,29 @@ describe('randomAddress', () => {
 
     expect(draws).toBe(2);
     expect(address).toEqual(fromLinear(0n));
+  });
+
+  it('redraws on a draw of exactly the library size, not just above it', () => {
+    // The boundary of the rejection test. `36^3200` is not an address — the
+    // last legal index is one below it — so a draw landing exactly on it must
+    // be discarded. With `<=` in place of `<` this returns an address in the
+    // unfilled tail of the last room, which `getPage` then rejects: a random
+    // book that cannot be opened.
+    const exactly = new Uint8Array(LIBRARY_SIZE_BYTE_LENGTH);
+    const encoded = toMinimalBytesBE(LIBRARY_SIZE);
+    exactly.set(encoded, LIBRARY_SIZE_BYTE_LENGTH - encoded.length);
+
+    let draws = 0;
+    const source: RandomSource = (byteLength: number): Uint8Array => {
+      draws++;
+      return draws === 1 ? exactly : new Uint8Array(byteLength);
+    };
+
+    const address = randomAddress(source);
+
+    expect(draws).toBe(2);
+    expect(address).toEqual(fromLinear(0n));
+    expect(() => getPage(address)).not.toThrow();
   });
 
   it('refuses a byte source that returns the wrong number of bytes', () => {
