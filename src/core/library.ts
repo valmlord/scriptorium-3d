@@ -211,6 +211,13 @@ function assertInAlphabet(characters: readonly string[]): void {
  * alphabet unless it did its own rejection sampling.
  */
 function pad(length: number, mode: PadMode, random: RandomSource): string {
+  // Stryker disable next-line ConditionalExpression: an equivalent mutant,
+  // verified rather than assumed. Removing this early return still yields ''
+  // for a zero length: 'spaces' repeats the symbol zero times, and 'random'
+  // computes 36^0 = 1, draws 0 from it and renders it at width 0. The second
+  // path only works because `intToDigits(0n, alphabet, 0)` happens to return
+  // '' — which is incidental, not a documented guarantee, and is exactly why
+  // this return stays rather than being deleted as dead (testing.md §4).
   if (length === 0) {
     return '';
   }
