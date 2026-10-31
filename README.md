@@ -21,10 +21,13 @@ inverse.
 
 | Document | What it holds |
 |---|---|
-| [SPEC.md](.claude/plans/SPEC.md) | Source of truth: the alphabet, the address model, the cipher, the URL scheme, the public API |
-| [DECISIONS.md](.claude/plans/DECISIONS.md) | Architecture decision records, including the alternatives that lost |
-| [ROADMAP.md](.claude/plans/ROADMAP.md) | Milestones, each with its tests and the question it has to answer before it closes |
-| [rules/](.claude/rules/) | Layer invariants, code quality, testing strategy, commit conventions |
+| [spec.md](docs/spec.md) | Source of truth: the alphabet, the address model, the cipher, the URL scheme, the public API |
+| [decisions.md](docs/decisions.md) | Architecture decision records, including the alternatives that lost |
+| [roadmap.md](docs/roadmap.md) | Milestones, each with its tests and the question it has to answer before it closes |
+| [architecture.md](docs/architecture.md) | Layer invariants, the render loop, determinism — the rules lint enforces |
+| [testing.md](docs/testing.md) | What is tested where, and why property tests and mutation testing carry this project |
+| [code-style.md](docs/code-style.md) | Typing, naming, errors, comments |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Branches, atomic commits, pull requests |
 
 Worth reading first if you only read one: ADR-0002 on why the bijection is a Feistel network rather than
 the modular multiplication the original library uses, and ADR-0003 on why the format is frozen.

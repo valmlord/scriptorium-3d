@@ -4,7 +4,7 @@ One milestone, one branch, one pull request into `main`. Atomic commits inside i
 A milestone is closed only when its **review gate** passes — not when the code runs.
 
 Every milestone ships its tests in the same pull request. A PR that only adds code is not finished; the
-standard for each layer is in `.claude/rules/testing.md`. Branch naming follows `.claude/rules/commits.md`.
+standard for each layer is in `docs/testing.md`. Branch naming follows `CONTRIBUTING.md`.
 
 ---
 

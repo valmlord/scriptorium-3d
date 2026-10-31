@@ -4,10 +4,9 @@ dist-ssr/
 coverage/
 playwright-report/
 test-results/
-# The spec, the ADRs and the project rules under .claude/ are tracked on
-# purpose: they are what a reader needs, and a cloud session clones the
-# repository rather than this machine. Only machine-local settings stay out.
-.claude/settings.local.json
+# Local tooling configuration. The engineering documentation it used to hold
+# now lives in docs/ and CONTRIBUTING.md, where a reader expects it.
+.claude/
 *.local
 
 # Logs

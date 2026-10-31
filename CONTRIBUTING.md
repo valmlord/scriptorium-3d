@@ -1,10 +1,8 @@
 # Branches, commits and pull requests
 
-The house rules, adapted from `~/Documents/Tixter/.claude/rules/commits.md`. Everything below is written in
-**English**: branch names, commit messages, PR titles and descriptions.
-
-**The author makes every commit.** Agents and assistants hand over the message text; they do not run
-`git commit`, `git merge` or `git push`, and they never sign a commit as an AI.
+Everything below is written in **English**: branch names, commit messages, PR titles and descriptions.
+The project has one maintainer, so these rules exist to make the history readable by the person who will
+read it without any of the context — which is usually the same person, six months later.
 
 ---
 
@@ -87,7 +85,7 @@ Rewriting history on your own branch before the PR is open is normal. After anyo
 
 - Subjects that say nothing: `fix`, `update`, `wip`, `.`
 - Commented-out code, leftover `console.log`.
-- Any mention of Claude, an assistant or an AI — including `Co-Authored-By` and generation footers.
+- Tooling footers and boilerplate trailers that carry no information about the change.
 - Secrets, IDE files, `node_modules`, build artefacts.
 - Regenerated golden vectors passed off as a fix (see ADR-0003).
 
@@ -96,17 +94,17 @@ Rewriting history on your own branch before the PR is open is normal. After anyo
 ## 3. Pull requests
 
 Title uses the commit subject format. The description follows
-[`.github/pull_request_template.md`](../../.github/pull_request_template.md), filled with substance rather
+[`.github/pull_request_template.md`](.github/pull_request_template.md), filled with substance rather
 than "did what was asked".
 
 ### Before merging
 
 - [ ] CI is green. **A red pipeline never merges** — not "flaky", not "I'll fix it after".
-- [ ] Complies with [`architecture.md`](architecture.md) and [`code-style.md`](code-style.md).
-- [ ] No divergence from [`SPEC.md`](../plans/SPEC.md), or the spec changes in this same PR.
-- [ ] Non-trivial decisions recorded in [`DECISIONS.md`](../plans/DECISIONS.md).
+- [ ] Complies with [`architecture.md`](docs/architecture.md) and [`code-style.md`](docs/code-style.md).
+- [ ] No divergence from [`SPEC.md`](docs/spec.md), or the spec changes in this same PR.
+- [ ] Non-trivial decisions recorded in [`DECISIONS.md`](docs/decisions.md).
 - [ ] New logic covered by tests; the bijection and the address model are mandatory.
-- [ ] The milestone's review gate in [`ROADMAP.md`](../plans/ROADMAP.md) has been answered.
+- [ ] The milestone's review gate in [`ROADMAP.md`](docs/roadmap.md) has been answered.
 - [ ] You can explain every line of the diff.
 
 **Squash and merge.** `main` history then reads as a list of features. The squash message follows the same

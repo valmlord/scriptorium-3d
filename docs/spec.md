@@ -201,7 +201,7 @@ src/
   app/      router (URL ↔ address) and composition of the layers
 ```
 
-Invariants enforced by lint, not by good intentions — see `.claude/rules/architecture.md`.
+Invariants enforced by lint, not by good intentions — see `docs/architecture.md`.
 
 **Animation model.** Every transition between navigation levels is one GSAP timeline carrying a label.
 Going back is `.reverse()` of that same timeline, never a second hand-written animation. GSAP animates a
