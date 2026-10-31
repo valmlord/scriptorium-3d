@@ -55,21 +55,45 @@ exactly this before it writes.
 Coverage says a line ran. It does not say an assertion would have noticed it being wrong — and for this
 codebase that gap is the whole risk. Stryker runs against `src/core` only:
 
+- `npm run test:mutation`, configured in `stryker.config.json`.
 - Threshold: **85% mutation score**, break the build below 75%.
-- Not on every push — it is minutes, not seconds. Nightly, and on any PR touching `src/core/**`.
+- Not on every push — it is minutes, not seconds. Nightly, and on any PR touching `src/core/**`;
+  the `changes` job in `.github/workflows/ci.yml` decides which.
 
 If a surviving mutant turns out to be genuinely equivalent, it is excluded with a comment explaining why.
 Silently lowering the threshold is not an option.
 
+Stryker re-runs the suite once per mutant and `src/core` yields close to 600 of them, so the property
+tests are capped at 10 cases under Stryker alone (`src/core/__tests__/property-runs.ts`, ADR-0012). Fewer
+cases can only let a mutant *survive* that more would have killed, so the reported score is a floor
+rather than an inflation; every other run uses the full 1000.
+
+The cap is applied per `fc.assert`, not through `fc.configureGlobal({ numRuns })`: fast-check lets an
+explicit `numRuns` override the global one, and every property test here passes one, so a global cap
+would enforce nothing.
+
 ## 5. Performance is a test, not a feeling
 
-`vitest bench` covers page generation, and the benchmark asserts against a committed baseline:
+`vitest bench` reports the numbers for humans (`src/core/__tests__/*.bench.ts`), and the budget is
+asserted against a committed baseline:
 
 - `getPage` on a cold cache: fails the build above **5 ms** (reference machine: 1.34 ms).
 - `locate`: fails above **5 ms** (reference: 0.98 ms).
 
 The margin is wide because CI machines are not reference machines. The point is to catch an accidental
 `O(n²)` radix conversion, not to police microseconds.
+
+**The assertion does not live in the `.bench.ts` file.** `vitest run` does not collect `.bench.ts` files
+and `vitest bench` does not run `it` tasks, so an `expect` written beside a `bench` executes in neither
+mode and guarantees nothing. The budget is asserted in `src/core/__tests__/performance.test.ts`, which
+`npm run test` does run — and it is measured as a median of several samples, so one scheduler hiccup on
+a shared runner cannot fail the build while a genuine complexity regression, which moves every sample,
+still does.
+
+The budget is not asserted under `npm run coverage` or `npm run test:mutation`: the same call measures
+~0.7 ms plain, ~6 ms under v8 coverage and ~8 ms under Stryker, so timing those runs would be measuring
+the instrumentation (ADR-0012). CI's `verify` job runs uninstrumented, so the threshold is enforced on
+every push and every pull request.
 
 Frame budget is asserted in Playwright instead: during a scripted camera flight, no frame exceeds 32 ms and
 no more than 1% of frames exceed 20 ms, measured through the debug hook.

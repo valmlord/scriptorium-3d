@@ -176,3 +176,141 @@ bar. Their state lives in the navigation FSM, not in a component tree, and a vir
 adding a render loop that competes with the real one for frame budget.
 
 **Consequence.** DOM updates are written by hand and must stay confined to `ui/`.
+
+---
+
+## ADR-0010 — The seed encoding is injective by construction, not by layout
+
+**Decision.** `prf.ts` implements the seed input of SPEC §4.3 exactly as written —
+`DOMAIN_TAG ‖ u8(round) ‖ u32be(xb.length) ‖ xb` — and the encoding is kept in its own
+function, `seedInput`, separate from the SHA-256 call that consumes it.
+
+**Why.** The property that matters is that distinct `(round, half)` pairs never produce the same
+seed bytes. If two did, two different addresses would share a round-function value, and the
+bijection would stop being one — silently, because SHA-256 would be behaving perfectly. Keeping
+the encoding separate from the hashing is what lets a test *decode* the bytes back into
+`(round, half)` and prove injectivity, instead of asserting it in a comment. That decoder is in
+`prf.test.ts`.
+
+**A correction to the SPEC's own justification.** SPEC §4.3 says the prefix is mandatory because
+"without it `u8(i)` and the leading bytes of `xb` can be reordered into the same seed for
+different inputs". For the frozen field order that is not quite true, and it is worth recording
+precisely why, so that nobody later removes the prefix on the grounds that the stated reason does
+not hold:
+
+- `DOMAIN_TAG` is a fixed 17 bytes and `u8(round)` a fixed 1 byte, and `xb` is the only
+  variable-length field and comes **last**. A byte string of that shape can be cut only one way,
+  so the encoding is injective even with the length removed. The ambiguity the SPEC describes
+  would be real if `xb` came before the round index, or if the tag were variable-length.
+- What the prefix buys concretely is that injectivity no longer *depends* on that layout. Add a
+  second variable-length field, reorder the fields, or make the tag configurable — all of which a
+  later format revision might reasonably do — and a prefix-free concatenation collides
+  immediately. With the length committed, the encoding stays self-delimiting whatever else is
+  appended.
+
+So the prefix stays, verbatim and mandatory, because the cost is four bytes inside a hash and the
+thing it protects is every book in the library. But it is belt-and-braces for the current layout
+rather than load-bearing, and a reader who works that out for themselves should find it written
+down here rather than conclude the SPEC is confused.
+
+**Alternatives rejected.**
+- *Drop the prefix, since the current layout is injective without it.* Saves nothing measurable
+  and makes a future field reordering silently catastrophic.
+- *Hash the fields separately and combine.* Equivalent, slower, and further from the SPEC text,
+  which is the thing the golden vectors freeze.
+
+**Consequence.** `PRF_BYTES`, `DOMAIN_TAG` and the field order are quoted from the SPEC rather
+than recomputed, and `prf.test.ts` pins the raw seed bytes as well as the round-function output,
+so a format break is localised to whichever of the two changed.
+
+---
+
+## ADR-0011 — Randomness is injected, never reached for
+
+**Decision.** `randomAddress` and `search` take an optional `RandomSource` — a
+`(byteLength: number) => Uint8Array` — defaulting to a `Math.random`-backed implementation that
+is the only thing in `core` to call `Math.random`. Both are uniform by rejection sampling, not by
+reducing a wider draw modulo the range.
+
+**Why.** Architecture §5 forbids reaching for randomness inside generation, and SPEC §5 gives
+`randomAddress()` and `search(query, mode, offset?)` with no source argument. Adding the source as
+a trailing optional parameter satisfies both: a caller can call exactly the signature the SPEC
+names, while a test, the worker, or anything that needs reproducibility can pin the bytes. Nothing
+on the generation path — `getPage`, `locate`, the Feistel network, the round function — can reach
+randomness at all, which is what makes a page a function of its address and nothing else.
+
+`Math.random` rather than `crypto.getRandomValues`: these bytes choose which book a reader is
+shown, not a key, so unpredictability to an attacker is not a requirement — and
+`crypto.getRandomValues` is an ambient global, which `core` is not allowed to depend on.
+
+Rejection sampling rather than `draw % limit`: the modulo would favour the low end of the range,
+which for `randomAddress` means some books being measurably more likely to open than others. The
+draw is masked to the limit's exact bit width and retried on overflow, which for
+`limit = 36^3200` accepts about 85% of draws.
+
+A source is also *validated*: one that returns fewer bytes than asked is rejected rather than
+quietly yielding a smaller, non-uniform value.
+
+**Alternatives rejected.**
+- *A required source argument.* Diverges from the SPEC's signature and makes the common call
+  verbose for no gain.
+- *A module-level seedable PRNG.* Hidden mutable state in a layer whose whole value is that it has
+  none.
+
+**Consequence.** `search` does not normalize its query either: `normalize` stays the caller's to
+apply (SPEC §2), because it is the caller that must decide whether to reject or strip the unknown
+symbols it reports — and normalizing inside `search` would falsify the function's contract, since
+the page would then contain the normalized query rather than the string that was passed in.
+
+---
+
+## ADR-0012 — Mutation and coverage runs get their own test budgets
+
+**Decision.** Three run modes exist and are configured separately:
+
+| Command | fast-check cases | Wall-clock budget asserted |
+|---|---|---|
+| `npm run test`, CI `verify` | 1000 | yes |
+| `npm run coverage` | 1000 | no |
+| `npm run test:mutation` | 10 | no |
+
+**Why.** Both deviations are about the measuring apparatus, not the code.
+
+*The wall-clock budget.* testing.md §5 fixes 5 ms for `getPage` and `locate`. The same call
+measures ~0.7 ms uninstrumented, ~6 ms under v8 coverage and ~8 ms under Stryker's mutant
+switching. Asserting 5 ms in those modes would be asserting a property of the profiler. The budget
+is therefore asserted only in the uninstrumented run — which is the one CI's `verify` job runs on
+every push and every pull request, so the threshold is enforced, not waived. A test that runs in
+*all three* modes sits beside the skipped suite and exercises the same path, so a skipped timing
+assertion cannot hide a broken bijection.
+
+*The case count.* Stryker re-runs the suite once per mutant, and `src/core` produces ~600 of them.
+At 1000 cases per property the run is hours. Capping the budget at 10 cases under Stryker can
+only let a mutant **survive** that more cases would have killed, so it moves the reported score
+down, never up: the score is a floor. Were it the other way round this would be unacceptable.
+
+The cap is applied by `propertyRuns` in `src/core/__tests__/property-runs.ts`, which every
+property test routes its count through, and **not** by `fc.configureGlobal({ numRuns })`. That
+distinction is the whole reason the helper exists: fast-check lets an explicit `numRuns` on an
+`fc.assert` override the global, and every property test here passes one, so a global cap reads
+like a budget while enforcing nothing. It was written that way first, and the mutation run was
+still taking hours when the discrepancy turned up — which is the same failure mode as the
+benchmark assertion in ADR-0012's sibling commit: configuration that looks like a control and is
+not one.
+
+Neither threshold itself is lowered. The 100% coverage floor on `src/core`, the 85% mutation
+threshold, the 75% break point and the 5 ms budget are all unchanged.
+
+**Alternatives rejected.**
+- *Lower the property-test case count everywhere.* Trades a real guarantee for a faster suite.
+- *Scale the time budget by a measured instrumentation factor.* Invents a number, and the factor
+  varies with what is being instrumented.
+- *Assert no performance budget at all.* An accidental `O(n²)` radix conversion is exactly the
+  regression this project cannot see any other way.
+
+**Consequence.** `vite.config.ts` and `vitest.stryker.config.ts` each pass a flag down through
+`test.env`, because the v8 provider instruments through an inspector session that leaves no trace
+in the worker's own environment. Stryker also runs only `src/core`'s tests: the two tests in
+`src/__tests__` drive the ESLint API over throwaway files written into each layer directory, which
+does not survive running from Stryker's sandbox copy — and a lint-configuration test could not
+kill a mutant in the bijection anyway.
