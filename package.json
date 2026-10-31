@@ -21,6 +21,7 @@
     "coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
     "verify": "npm run typecheck && npm run lint && npm run test",
+    "golden:regenerate": "vite-node scripts/regenerate-golden-vectors.ts",
     "test:mutation": "stryker run"
   },
   "devDependencies": {
