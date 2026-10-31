@@ -1,0 +1,31 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "_comment": "Mutation testing on src/core only (ADR-0008). Coverage proves a line ran; it says nothing about whether an assertion would have noticed it being wrong, and for a bijection with no database that gap is the entire risk.",
+  "packageManager": "npm",
+  "testRunner": "vitest",
+  "vitest": {
+    "configFile": "vitest.stryker.config.ts",
+    "related": false
+  },
+  "reporters": ["html", "clear-text", "progress"],
+  "htmlReporter": {
+    "fileName": "reports/mutation/index.html"
+  },
+  "coverageAnalysis": "perTest",
+  "mutate": [
+    "src/core/**/*.ts",
+    "!src/core/index.ts",
+    "!src/core/__tests__/**",
+    "!src/core/__fixtures__/**"
+  ],
+  "thresholds": {
+    "high": 90,
+    "low": 85,
+    "break": 75
+  },
+  "timeoutMS": 120000,
+  "timeoutFactor": 4,
+  "concurrency": 4,
+  "tempDirName": "node_modules/.stryker-tmp",
+  "disableTypeChecks": "src/core/**/*.ts"
+}
