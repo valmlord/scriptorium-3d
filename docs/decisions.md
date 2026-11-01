@@ -269,9 +269,10 @@ the page would then contain the normalized query rather than the string that was
 
 **Why.** Both deviations are about the measuring apparatus, not the code.
 
-_The wall-clock budget._ testing.md §5 fixes 5 ms for `getPage` and `locate`. The same call
-measures ~0.7 ms uninstrumented, ~6 ms under v8 coverage and ~8 ms under Stryker's mutant
-switching. Asserting 5 ms in those modes would be asserting a property of the profiler. The budget
+_The wall-clock budget._ testing.md §5 fixes a budget for `getPage` and `locate`. The same
+call measures ~0.7 ms uninstrumented, ~6 ms under v8 coverage and ~8 ms under Stryker's mutant
+switching, so a timing taken in either of those modes is a reading of the instrumentation rather
+than of the library — whatever the threshold happens to be. The budget
 is therefore asserted only in the uninstrumented run — which is the one CI's `verify` job runs on
 every push and every pull request, so the threshold is enforced, not waived. A test that runs in
 _all three_ modes sits beside the skipped suite and exercises the same path, so a skipped timing
@@ -292,7 +293,9 @@ benchmark assertion in ADR-0012's sibling commit: configuration that looks like 
 not one.
 
 Neither threshold itself is lowered. The 100% coverage floor on `src/core`, the 85% mutation
-threshold, the 75% break point and the 5 ms budget are all unchanged.
+threshold, the 75% break point and the wall-clock budget are all unchanged by this decision.
+The budget's figure was later recalibrated for an unrelated reason (ADR-0013), which does not
+disturb the argument above: it never rested on what the number was.
 
 **Alternatives rejected.**
 
@@ -308,3 +311,44 @@ in the worker's own environment. Stryker also runs only `src/core`'s tests: the 
 `src/__tests__` drive the ESLint API over throwaway files written into each layer directory, which
 does not survive running from Stryker's sandbox copy — and a lint-configuration test could not
 kill a mutant in the bijection anyway.
+
+---
+
+## ADR-0013 — The performance budget is calibrated on the machine that enforces it
+
+**Decision.** The wall-clock budget of testing.md §5 is **25 ms** for `getPage` and `locate`,
+measured as the median of 15 samples. The figure lives in testing.md §5 and in the single
+`BUDGET_MS` constant that asserts it; no comment, benchmark label or other record restates it.
+
+**Why.** The first budget was 5 ms, taken from the reference machine's 1.34 ms (SPEC §4.4) and
+never measured anywhere else. Measured medians of 15 samples for `getPage`: development laptop
+0.53–0.80 ms, reference machine 1.34 ms, `ubuntu-latest` ~5.05 ms. So the threshold sat on the
+value of the only machine that enforces it — the first CI run of the suite failed at 5.052 ms and
+the next run of the same commit passed. A gate that decides by scheduler luck reports a safety it
+does not have, and testing.md §9 fixes a flaky test the day it is noticed rather than retrying it.
+
+25 ms is five times the slowest observation, and the margin costs no detection power: the budget
+exists to catch an accidental `O(n²)` radix conversion or a round function that re-hashes the whole
+page, and those are orders of magnitude rather than percent. Verified by raising the assertion to
+an impossible value and watching all five timing tests go red before restoring it.
+
+**A number has one home.** The 5 ms figure had also been restated in four places that assert
+nothing — a comment in `prf.ts`, the docstring and the `bench` label in `bignum.bench.ts`, and a
+second docstring in `performance.test.ts` — and the commit that changed the budget updated none of
+them, so for the length of that commit the repository documented two different budgets. A comment
+that lies is worse than no comment (code-style §1), and the cheapest way to keep four of them
+honest is to not have them: each now cites testing.md §5 instead of repeating its number.
+
+**Alternatives rejected.**
+
+- _Keep 5 ms and retry the job._ A retry discards exactly the information the test exists to
+  produce (testing.md §9).
+- _Calibrate to the reference machine and skip the budget on CI._ The reference machine does not
+  run on every push, so the budget would then be enforced nowhere.
+- _Scale the budget by a measured runner factor._ Invents a number that moves with the runner
+  image, which is the same move ADR-0012 rejected for instrumentation.
+
+**Consequence.** ADR-0012's decision not to assert the budget under the coverage and mutation runs
+stands, but its reason is no longer arithmetic: ~6 ms and ~8 ms both fit inside 25 ms, so the
+assertion would now pass there. The reason that survives is the one testing.md §5 gives — a timing
+taken through an instrumented build measures the instrumentation.
