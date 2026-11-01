@@ -11,14 +11,14 @@ accordingly.
 
 ## 1. What gets tested where
 
-| Layer | How it is tested | Why that way |
-|---|---|---|
-| `core` | Vitest unit + **fast-check property tests** + committed golden vectors + mutation testing | Pure, deterministic, no I/O. There is no excuse for anything less than complete coverage here. |
-| `worker` | Unit tests on the protocol handler as a pure function; integration test through a real `Worker` | The handler is where the bugs are; the thread is where the flakes are. Test them separately. |
-| `state` | Exhaustive transition table test — every `(state, event)` pair asserted, legal or rejected | An FSM is a finite object, so "we tested the paths we thought of" is a choice, not a limitation. |
-| `motion` | Timelines advanced with GSAP's ticker under fake time, asserting rig values at labels | Numbers only, no WebGL (ADR-0004). If a timeline needs a canvas to be tested, it is in the wrong layer. |
-| `engine` | Pure layout maths (shelf positions, instance matrices, address↔`instanceId`) tested directly; the renderer itself is not unit-tested | Asserting on a GPU is a losing game. Extract the arithmetic, keep the renderer thin enough to review by eye. |
-| `ui` / `app` | Playwright end-to-end against the built site | The only place where "the user typed a phrase and arrived at the book" is actually a true statement. |
+| Layer        | How it is tested                                                                                                                     | Why that way                                                                                                 |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| `core`       | Vitest unit + **fast-check property tests** + committed golden vectors + mutation testing                                            | Pure, deterministic, no I/O. There is no excuse for anything less than complete coverage here.               |
+| `worker`     | Unit tests on the protocol handler as a pure function; integration test through a real `Worker`                                      | The handler is where the bugs are; the thread is where the flakes are. Test them separately.                 |
+| `state`      | Exhaustive transition table test — every `(state, event)` pair asserted, legal or rejected                                           | An FSM is a finite object, so "we tested the paths we thought of" is a choice, not a limitation.             |
+| `motion`     | Timelines advanced with GSAP's ticker under fake time, asserting rig values at labels                                                | Numbers only, no WebGL (ADR-0004). If a timeline needs a canvas to be tested, it is in the wrong layer.      |
+| `engine`     | Pure layout maths (shelf positions, instance matrices, address↔`instanceId`) tested directly; the renderer itself is not unit-tested | Asserting on a GPU is a losing game. Extract the arithmetic, keep the renderer thin enough to review by eye. |
+| `ui` / `app` | Playwright end-to-end against the built site                                                                                         | The only place where "the user typed a phrase and arrived at the book" is actually a true statement.         |
 
 ## 2. Property tests over examples
 
@@ -65,7 +65,7 @@ Silently lowering the threshold is not an option.
 
 Stryker re-runs the suite once per mutant and `src/core` yields close to 600 of them, so the property
 tests are capped at 10 cases under Stryker alone (`src/core/__tests__/property-runs.ts`, ADR-0012). Fewer
-cases can only let a mutant *survive* that more would have killed, so the reported score is a floor
+cases can only let a mutant _survive_ that more would have killed, so the reported score is a floor
 rather than an inflation; every other run uses the full 1000.
 
 The cap is applied per `fc.assert`, not through `fc.configureGlobal({ numRuns })`: fast-check lets an
@@ -115,7 +115,7 @@ Mandatory scenarios, each one owned by the milestone that introduces it:
 8. Axe reports no serious or critical violations on the reader and the search panel.
 
 **No pixel-diff screenshots of the WebGL canvas.** GPU and driver differences make them flake, and a flaky
-test trains everyone to ignore red. Assert on the scene's *state* instead — see §7. Screenshots of DOM
+test trains everyone to ignore red. Assert on the scene's _state_ instead — see §7. Screenshots of DOM
 overlays are fine.
 
 ## 7. The debug hook
@@ -125,11 +125,11 @@ The app exposes `window.__scriptorium` **in development and test builds only** (
 
 ```ts
 interface DebugHook {
-  state(): NavigationState;        // current FSM node
-  address(): Address | null;       // where the user is
-  rig(): CameraRigSnapshot;        // numeric camera state
-  frames(): FrameTimings;          // rolling frame budget
-  waitForIdle(): Promise<void>;    // timelines settled, worker queue empty
+  state(): NavigationState; // current FSM node
+  address(): Address | null; // where the user is
+  rig(): CameraRigSnapshot; // numeric camera state
+  frames(): FrameTimings; // rolling frame budget
+  waitForIdle(): Promise<void>; // timelines settled, worker queue empty
 }
 ```
 
@@ -138,12 +138,12 @@ on a fixed duration is rejected in review; `waitForIdle()` exists precisely so t
 
 ## 8. Coverage thresholds
 
-| Path | Lines / branches |
-|---|---|
-| `src/core/**` | 100% — it is pure, small and load-bearing |
-| `src/worker/**`, `src/state/**` | 90% |
-| `src/motion/**` | 80% |
-| `src/engine/**`, `src/ui/**` | no threshold; covered by e2e |
+| Path                            | Lines / branches                          |
+| ------------------------------- | ----------------------------------------- |
+| `src/core/**`                   | 100% — it is pure, small and load-bearing |
+| `src/worker/**`, `src/state/**` | 90%                                       |
+| `src/motion/**`                 | 80%                                       |
+| `src/engine/**`, `src/ui/**`    | no threshold; covered by e2e              |
 
 Thresholds only ratchet upward. Lowering one requires a line in the PR description explaining what was
 given up.
