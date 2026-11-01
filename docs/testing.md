@@ -11,14 +11,14 @@ accordingly.
 
 ## 1. What gets tested where
 
-| Layer | How it is tested | Why that way |
-|---|---|---|
-| `core` | Vitest unit + **fast-check property tests** + committed golden vectors + mutation testing | Pure, deterministic, no I/O. There is no excuse for anything less than complete coverage here. |
-| `worker` | Unit tests on the protocol handler as a pure function; integration test through a real `Worker` | The handler is where the bugs are; the thread is where the flakes are. Test them separately. |
-| `state` | Exhaustive transition table test — every `(state, event)` pair asserted, legal or rejected | An FSM is a finite object, so "we tested the paths we thought of" is a choice, not a limitation. |
-| `motion` | Timelines advanced with GSAP's ticker under fake time, asserting rig values at labels | Numbers only, no WebGL (ADR-0004). If a timeline needs a canvas to be tested, it is in the wrong layer. |
-| `engine` | Pure layout maths (shelf positions, instance matrices, address↔`instanceId`) tested directly; the renderer itself is not unit-tested | Asserting on a GPU is a losing game. Extract the arithmetic, keep the renderer thin enough to review by eye. |
-| `ui` / `app` | Playwright end-to-end against the built site | The only place where "the user typed a phrase and arrived at the book" is actually a true statement. |
+| Layer        | How it is tested                                                                                                                     | Why that way                                                                                                 |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| `core`       | Vitest unit + **fast-check property tests** + committed golden vectors + mutation testing                                            | Pure, deterministic, no I/O. There is no excuse for anything less than complete coverage here.               |
+| `worker`     | Unit tests on the protocol handler as a pure function; integration test through a real `Worker`                                      | The handler is where the bugs are; the thread is where the flakes are. Test them separately.                 |
+| `state`      | Exhaustive transition table test — every `(state, event)` pair asserted, legal or rejected                                           | An FSM is a finite object, so "we tested the paths we thought of" is a choice, not a limitation.             |
+| `motion`     | Timelines advanced with GSAP's ticker under fake time, asserting rig values at labels                                                | Numbers only, no WebGL (ADR-0004). If a timeline needs a canvas to be tested, it is in the wrong layer.      |
+| `engine`     | Pure layout maths (shelf positions, instance matrices, address↔`instanceId`) tested directly; the renderer itself is not unit-tested | Asserting on a GPU is a losing game. Extract the arithmetic, keep the renderer thin enough to review by eye. |
+| `ui` / `app` | Playwright end-to-end against the built site                                                                                         | The only place where "the user typed a phrase and arrived at the book" is actually a true statement.         |
 
 ## 2. Property tests over examples
 
@@ -55,21 +55,51 @@ exactly this before it writes.
 Coverage says a line ran. It does not say an assertion would have noticed it being wrong — and for this
 codebase that gap is the whole risk. Stryker runs against `src/core` only:
 
+- `npm run test:mutation`, configured in `stryker.config.json`.
 - Threshold: **85% mutation score**, break the build below 75%.
-- Not on every push — it is minutes, not seconds. Nightly, and on any PR touching `src/core/**`.
+- Not on every push — it is minutes, not seconds. Nightly, and on any PR touching `src/core/**`;
+  the `changes` job in `.github/workflows/ci.yml` decides which.
 
 If a surviving mutant turns out to be genuinely equivalent, it is excluded with a comment explaining why.
 Silently lowering the threshold is not an option.
 
+Stryker re-runs the suite once per mutant and `src/core` yields close to 600 of them, so the property
+tests are capped at 10 cases under Stryker alone (`src/core/__tests__/property-runs.ts`, ADR-0012). Fewer
+cases can only let a mutant _survive_ that more would have killed, so the reported score is a floor
+rather than an inflation; every other run uses the full 1000.
+
+The cap is applied per `fc.assert`, not through `fc.configureGlobal({ numRuns })`: fast-check lets an
+explicit `numRuns` override the global one, and every property test here passes one, so a global cap
+would enforce nothing.
+
 ## 5. Performance is a test, not a feeling
 
-`vitest bench` covers page generation, and the benchmark asserts against a committed baseline:
+`vitest bench` reports the numbers for humans (`src/core/__tests__/*.bench.ts`), and the budget is
+asserted against a committed baseline:
 
-- `getPage` on a cold cache: fails the build above **5 ms** (reference machine: 1.34 ms).
-- `locate`: fails above **5 ms** (reference: 0.98 ms).
+- `getPage` on a cold cache: fails the build above **25 ms**.
+- `locate`: fails above **25 ms**.
 
-The margin is wide because CI machines are not reference machines. The point is to catch an accidental
-`O(n²)` radix conversion, not to police microseconds.
+The budget is calibrated on the slowest machine that enforces it. Measured medians of 15 samples for
+`getPage`: development laptop 0.53–0.80 ms, reference machine 1.34 ms (SPEC §4.4), `ubuntu-latest`
+~5.05 ms. An earlier 5 ms budget was set from the reference figure alone; it failed on its first CI
+run at 5.052 ms and passed on the next, because the threshold sat on the runner's own value and the
+gate decided by luck. 25 ms is five times the slowest observation.
+
+The margin does not weaken the gate: it exists to catch an accidental `O(n²)` radix conversion or a
+round function that re-hashes the whole page, and those are orders of magnitude, not percent.
+
+**The assertion does not live in the `.bench.ts` file.** `vitest run` does not collect `.bench.ts` files
+and `vitest bench` does not run `it` tasks, so an `expect` written beside a `bench` executes in neither
+mode and guarantees nothing. The budget is asserted in `src/core/__tests__/performance.test.ts`, which
+`npm run test` does run — and it is measured as a median of several samples, so one scheduler hiccup on
+a shared runner cannot fail the build while a genuine complexity regression, which moves every sample,
+still does.
+
+The budget is not asserted under `npm run coverage` or `npm run test:mutation`: the same call measures
+~0.7 ms plain, ~6 ms under v8 coverage and ~8 ms under Stryker, so timing those runs would be measuring
+the instrumentation (ADR-0012). CI's `verify` job runs uninstrumented, so the threshold is enforced on
+every push and every pull request.
 
 Frame budget is asserted in Playwright instead: during a scripted camera flight, no frame exceeds 32 ms and
 no more than 1% of frames exceed 20 ms, measured through the debug hook.
@@ -91,7 +121,7 @@ Mandatory scenarios, each one owned by the milestone that introduces it:
 8. Axe reports no serious or critical violations on the reader and the search panel.
 
 **No pixel-diff screenshots of the WebGL canvas.** GPU and driver differences make them flake, and a flaky
-test trains everyone to ignore red. Assert on the scene's *state* instead — see §7. Screenshots of DOM
+test trains everyone to ignore red. Assert on the scene's _state_ instead — see §7. Screenshots of DOM
 overlays are fine.
 
 ## 7. The debug hook
@@ -101,11 +131,11 @@ The app exposes `window.__scriptorium` **in development and test builds only** (
 
 ```ts
 interface DebugHook {
-  state(): NavigationState;        // current FSM node
-  address(): Address | null;       // where the user is
-  rig(): CameraRigSnapshot;        // numeric camera state
-  frames(): FrameTimings;          // rolling frame budget
-  waitForIdle(): Promise<void>;    // timelines settled, worker queue empty
+  state(): NavigationState; // current FSM node
+  address(): Address | null; // where the user is
+  rig(): CameraRigSnapshot; // numeric camera state
+  frames(): FrameTimings; // rolling frame budget
+  waitForIdle(): Promise<void>; // timelines settled, worker queue empty
 }
 ```
 
@@ -114,12 +144,12 @@ on a fixed duration is rejected in review; `waitForIdle()` exists precisely so t
 
 ## 8. Coverage thresholds
 
-| Path | Lines / branches |
-|---|---|
-| `src/core/**` | 100% — it is pure, small and load-bearing |
-| `src/worker/**`, `src/state/**` | 90% |
-| `src/motion/**` | 80% |
-| `src/engine/**`, `src/ui/**` | no threshold; covered by e2e |
+| Path                            | Lines / branches                          |
+| ------------------------------- | ----------------------------------------- |
+| `src/core/**`                   | 100% — it is pure, small and load-bearing |
+| `src/worker/**`, `src/state/**` | 90%                                       |
+| `src/motion/**`                 | 80%                                       |
+| `src/engine/**`, `src/ui/**`    | no threshold; covered by e2e              |
 
 Thresholds only ratchet upward. Lowering one requires a line in the PR description explaining what was
 given up.

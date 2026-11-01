@@ -113,3 +113,47 @@ export class ValueOutOfDomainError extends Error {
     this.length = length;
   }
 }
+
+/**
+ * A search query cannot be placed on a page because of its length: it is
+ * empty, or longer than a page. Carries the length received and the inclusive
+ * range a query may have, so the caller can tell which bound was crossed
+ * without re-deriving it.
+ */
+export class InvalidSearchQueryError extends Error {
+  readonly length: number;
+  readonly min: number;
+  readonly max: number;
+
+  constructor(length: number, min: number, max: number) {
+    super(
+      `Search query length ${String(length)} not in [${String(min)}, ${String(max)}]`
+    );
+    this.name = 'InvalidSearchQueryError';
+    this.length = length;
+    this.min = min;
+    this.max = max;
+  }
+}
+
+/**
+ * A search offset would place the query outside the page: it is negative, not
+ * an integer, or far enough along that the query would run past the end.
+ * Carries the query length and the largest offset that would still fit, which
+ * is the number the caller actually needs in order to correct the request.
+ */
+export class InvalidSearchOffsetError extends Error {
+  readonly offset: number;
+  readonly queryLength: number;
+  readonly maxOffset: number;
+
+  constructor(offset: number, queryLength: number, maxOffset: number) {
+    super(
+      `Search offset ${String(offset)} not in [0, ${String(maxOffset)}] for a query of length ${String(queryLength)}`
+    );
+    this.name = 'InvalidSearchOffsetError';
+    this.offset = offset;
+    this.queryLength = queryLength;
+    this.maxOffset = maxOffset;
+  }
+}

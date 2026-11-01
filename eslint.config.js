@@ -22,10 +22,10 @@ export default typescriptEslint.config(
       ? Array.isArray(cfg.files)
         ? cfg.files
         : [cfg.files]
-      : ['src/**/*.ts'],
+      : ['src/**/*.ts', 'scripts/**/*.ts'],
   })),
   {
-    files: ['src/**/*.ts'],
+    files: ['src/**/*.ts', 'scripts/**/*.ts'],
     languageOptions: {
       parserOptions: {
         projectService: true,
