@@ -12,20 +12,14 @@ import { getPage, locate } from '../library';
  * beside a `bench` would execute in neither mode and enforce nothing. The
  * numbers for humans are reported by `src/core/__tests__/library.bench.ts`.
  *
- * The budget is calibrated on the slowest machine that enforces it, because a
- * threshold set on a fast one is a coin flip everywhere else. Measured medians
- * of 15 samples for `getPage`:
- *
- *   development laptop   0.53 - 0.80 ms
- *   reference machine    1.34 ms          (SPEC 4.4)
- *   ubuntu-latest        ~5.05 ms         (CI run 41275581641)
- *
- * The first CI run of this suite failed at 5.052 ms against a 5 ms budget and
- * the next one passed: the threshold sat exactly on the runner's own value, so
- * the gate decided by luck rather than by the code. 25 ms is five times the
- * slowest observation, which leaves no room for that while still catching what
- * this budget exists for — an accidental O(n^2) radix conversion or a round
- * function that re-hashes the whole page are orders of magnitude, not percent.
+ * The budget is calibrated on the slowest machine that enforces it, not on the
+ * fastest one to hand: an earlier 5 ms threshold sat on `ubuntu-latest`'s own
+ * median, failed one CI run at 5.052 ms and passed the next, so the gate
+ * decided by luck rather than by the code. 25 ms is five times the slowest of
+ * the three machines measured, which still catches what this budget exists for
+ * — an accidental O(n^2) radix conversion or a round function that re-hashes
+ * the whole page are orders of magnitude, not percent. The measurements and
+ * the rest of the reasoning are in ADR-0013.
  *
  * Each measurement is the **median** of several samples rather than a single
  * reading. A median cannot be dragged over the threshold by one scheduler
@@ -47,7 +41,7 @@ const SAMPLES = 15;
  * uninstrumented run.
  *
  * This is not a quarantined failure. `npm run test` and the CI `verify` job
- * run with neither flag, so the 5 ms budget of testing.md §5 is enforced on
+ * run with neither flag, so the budget of testing.md §5 is enforced on
  * every push and every pull request — and the test below this suite runs in
  * all three modes, so a skipped timing assertion can never hide a broken
  * bijection. The flags are set in `vite.config.ts` and

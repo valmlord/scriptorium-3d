@@ -114,7 +114,7 @@ export function asciiToBytes(text: string): Uint8Array {
  * Goes through `toString(16)`, which V8 implements natively: converting the
  * ~8272-bit halves this is called with takes microseconds, where a
  * divide-by-256 loop in JavaScript takes milliseconds — and this runs 10 times
- * per page inside a 5 ms budget (testing.md §5).
+ * per page inside the budget of testing.md §5.
  */
 export function toMinimalBytesBE(value: bigint): Uint8Array {
   if (value < 0n) {

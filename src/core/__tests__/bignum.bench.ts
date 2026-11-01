@@ -4,10 +4,10 @@ import { digitsToInt, intToDigits } from '../bignum';
 
 /**
  * The 3200-character round-trip is the hot path of the whole library: every
- * page read and every search goes through it. The committed baseline is 5 ms
- * (testing.md §5); the reference machine does it in well under that. The
- * margin is wide because CI machines are not reference machines — the point is
- * to catch an accidental O(n²) radix conversion, not to police microseconds.
+ * page read and every search goes through it. The committed budget is in
+ * testing.md §5, calibrated on the slowest machine that enforces it
+ * (ADR-0013); its margin is there to catch an accidental O(n²) radix
+ * conversion, not to police microseconds.
  *
  * This file reports the number for humans. The assertion lives in
  * `performance.test.ts`: `vitest run` does not collect `.bench.ts` files and
@@ -16,7 +16,7 @@ import { digitsToInt, intToDigits } from '../bignum';
  */
 describe('bignum round-trip', () => {
   bench(
-    '3200-character page round-trip stays under 5 ms',
+    '3200-character page round-trip',
     () => {
       const value = digitsToInt('а'.repeat(3200), PAGE_ALPHABET);
       intToDigits(value, PAGE_ALPHABET, 3200);
