@@ -102,31 +102,6 @@ adding a render loop that competes with the real one for frame budget.
 
 ---
 
-## ADR-0009 — Room names parse leniently, render canonically
-
-**Decision.** `roomFromName` accepts a name with leading zeros and resolves it; `roomToName` never produces
-one. A separate predicate reports whether a name is canonical, and the router rewrites a non-canonical name
-to the canonical form on load.
-
-**Why.** Encoding and parsing pull in opposite directions here. Strict parsing would make a hand-edited or
-truncated URL fail instead of landing somewhere sensible, which is hostile for no gain. Lenient parsing
-alone, however, makes name→room many-to-one: `1`, `01` and `0001` all reach room 1, so the same page has
-unboundedly many URLs and the project's central claim — that a link _is_ the page — quietly stops holding.
-
-Splitting the two resolves it: the address space keeps exactly one name per room, while a malformed link
-still opens.
-
-**Alternatives rejected.**
-
-- _Reject non-canonical names._ Bijective, but turns a stray keystroke into an error page.
-- _Fixed-width names padded to 3197 characters._ Also bijective, and it was briefly implemented, but it
-  makes every URL 3197 characters even for room 0 — a cost paid by every shared link to buy uniformity
-  nobody sees.
-
-**Consequence.** M8 must rewrite the URL after parsing, not merely accept it.
-
----
-
 ## ADR-0007 — End-to-end tests assert scene state, never pixels
 
 **Decision.** No screenshot comparison of the WebGL canvas. Playwright asserts against a `window.__scriptorium`
@@ -170,15 +145,28 @@ mutation runs are affordable. Mutating scene code would mostly produce timeouts.
 
 ---
 
-## ADR-0006 — No UI framework
+## ADR-0009 — Room names parse leniently, render canonically
 
-**Decision.** Vite and TypeScript, no React or Svelte.
+**Decision.** `roomFromName` accepts a name with leading zeros and resolves it; `roomToName` never produces
+one. A separate predicate reports whether a name is canonical, and the router rewrites a non-canonical name
+to the canonical form on load.
 
-**Why.** The interface is a handful of overlays over a WebGL canvas — a reader, a search panel, an address
-bar. Their state lives in the navigation FSM, not in a component tree, and a virtual DOM buys nothing while
-adding a render loop that competes with the real one for frame budget.
+**Why.** Encoding and parsing pull in opposite directions here. Strict parsing would make a hand-edited or
+truncated URL fail instead of landing somewhere sensible, which is hostile for no gain. Lenient parsing
+alone, however, makes name→room many-to-one: `1`, `01` and `0001` all reach room 1, so the same page has
+unboundedly many URLs and the project's central claim — that a link _is_ the page — quietly stops holding.
 
-**Consequence.** DOM updates are written by hand and must stay confined to `ui/`.
+Splitting the two resolves it: the address space keeps exactly one name per room, while a malformed link
+still opens.
+
+**Alternatives rejected.**
+
+- _Reject non-canonical names._ Bijective, but turns a stray keystroke into an error page.
+- _Fixed-width names padded to 3197 characters._ Also bijective, and it was briefly implemented, but it
+  makes every URL 3197 characters even for room 0 — a cost paid by every shared link to buy uniformity
+  nobody sees.
+
+**Consequence.** M8 must rewrite the URL after parsing, not merely accept it.
 
 ---
 
