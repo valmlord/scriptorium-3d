@@ -77,11 +77,17 @@ would enforce nothing.
 `vitest bench` reports the numbers for humans (`src/core/__tests__/*.bench.ts`), and the budget is
 asserted against a committed baseline:
 
-- `getPage` on a cold cache: fails the build above **5 ms** (reference machine: 1.34 ms).
-- `locate`: fails above **5 ms** (reference: 0.98 ms).
+- `getPage` on a cold cache: fails the build above **25 ms**.
+- `locate`: fails above **25 ms**.
 
-The margin is wide because CI machines are not reference machines. The point is to catch an accidental
-`O(n²)` radix conversion, not to police microseconds.
+The budget is calibrated on the slowest machine that enforces it. Measured medians of 15 samples for
+`getPage`: development laptop 0.53–0.80 ms, reference machine 1.34 ms (SPEC §4.4), `ubuntu-latest`
+~5.05 ms. An earlier 5 ms budget was set from the reference figure alone; it failed on its first CI
+run at 5.052 ms and passed on the next, because the threshold sat on the runner's own value and the
+gate decided by luck. 25 ms is five times the slowest observation.
+
+The margin does not weaken the gate: it exists to catch an accidental `O(n²)` radix conversion or a
+round function that re-hashes the whole page, and those are orders of magnitude, not percent.
 
 **The assertion does not live in the `.bench.ts` file.** `vitest run` does not collect `.bench.ts` files
 and `vitest bench` does not run `it` tasks, so an `expect` written beside a `bench` executes in neither

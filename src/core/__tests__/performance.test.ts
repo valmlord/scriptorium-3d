@@ -12,10 +12,20 @@ import { getPage, locate } from '../library';
  * beside a `bench` would execute in neither mode and enforce nothing. The
  * numbers for humans are reported by `src/core/__tests__/library.bench.ts`.
  *
- * The budget is 5 ms against a reference machine that does it in ~1.3 ms. The
- * margin is wide because CI runners are not reference machines: the point is
- * to catch an accidental O(n^2) radix conversion or a round function that
- * re-hashes the whole page, not to police microseconds.
+ * The budget is calibrated on the slowest machine that enforces it, because a
+ * threshold set on a fast one is a coin flip everywhere else. Measured medians
+ * of 15 samples for `getPage`:
+ *
+ *   development laptop   0.53 - 0.80 ms
+ *   reference machine    1.34 ms          (SPEC 4.4)
+ *   ubuntu-latest        ~5.05 ms         (CI run 41275581641)
+ *
+ * The first CI run of this suite failed at 5.052 ms against a 5 ms budget and
+ * the next one passed: the threshold sat exactly on the runner's own value, so
+ * the gate decided by luck rather than by the code. 25 ms is five times the
+ * slowest observation, which leaves no room for that while still catching what
+ * this budget exists for — an accidental O(n^2) radix conversion or a round
+ * function that re-hashes the whole page are orders of magnitude, not percent.
  *
  * Each measurement is the **median** of several samples rather than a single
  * reading. A median cannot be dragged over the threshold by one scheduler
@@ -24,7 +34,7 @@ import { getPage, locate } from '../library';
  * laxer one.
  */
 
-const BUDGET_MS = 5;
+const BUDGET_MS = 25;
 const SAMPLES = 15;
 
 /**
@@ -72,13 +82,13 @@ const addresses = Array.from({ length: SAMPLES }, (_unused, index) =>
 );
 
 describe.skipIf(isInstrumented)('generation stays inside the committed budget', () => {
-  it('getPage takes under 5 ms per page', () => {
+  it('getPage takes under the committed budget', () => {
     const elapsed = medianMs((iteration) => getPage(cycle(addresses, iteration)));
 
     expect(elapsed).toBeLessThan(BUDGET_MS);
   });
 
-  it('locate takes under 5 ms per page', () => {
+  it('locate takes under the committed budget', () => {
     const pages = addresses.map((address) => getPage(address));
 
     const elapsed = medianMs((iteration) => locate(cycle(pages, iteration)));
@@ -104,7 +114,7 @@ describe.skipIf(isInstrumented)('generation stays inside the committed budget', 
     expect(elapsed).toBeLessThan(BUDGET_MS);
   });
 
-  it('a full 3200-character radix round-trip stays under 5 ms', () => {
+  it('a full 3200-character radix round-trip stays inside the budget', () => {
     // Moved here from `bignum.bench.ts`, where the same assertion was written
     // beside a `bench` task and therefore never executed in either mode.
     const text = 'а'.repeat(PAGE_LENGTH);
