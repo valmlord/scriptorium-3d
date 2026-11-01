@@ -37,10 +37,11 @@ Ten rounds, not four: four is the theoretical minimum for a strong pseudo-random
 six cost about 0.5 ms in a construction that runs once per page.
 
 **Alternatives rejected.**
-- *Modular multiplication.* Rejected for the linearity above.
-- *A seeded PRNG per page.* Simple and fast, but one-directional — search would become impossible, and
+
+- _Modular multiplication._ Rejected for the linearity above.
+- _A seeded PRNG per page._ Simple and fast, but one-directional — search would become impossible, and
   search is half the product.
-- *AES-FF1 from a library.* Standardised, but no maintained JS implementation handles a radix-36 domain of
+- _AES-FF1 from a library._ Standardised, but no maintained JS implementation handles a radix-36 domain of
   3200 digits; a bespoke Feistel over `bigint` is 40 lines and testable against its own inverse.
 
 **Consequence.** `PAGE_LENGTH` must stay even, or the balanced split stops covering the domain exactly.
@@ -110,14 +111,15 @@ to the canonical form on load.
 **Why.** Encoding and parsing pull in opposite directions here. Strict parsing would make a hand-edited or
 truncated URL fail instead of landing somewhere sensible, which is hostile for no gain. Lenient parsing
 alone, however, makes name→room many-to-one: `1`, `01` and `0001` all reach room 1, so the same page has
-unboundedly many URLs and the project's central claim — that a link *is* the page — quietly stops holding.
+unboundedly many URLs and the project's central claim — that a link _is_ the page — quietly stops holding.
 
 Splitting the two resolves it: the address space keeps exactly one name per room, while a malformed link
 still opens.
 
 **Alternatives rejected.**
-- *Reject non-canonical names.* Bijective, but turns a stray keystroke into an error page.
-- *Fixed-width names padded to 3197 characters.* Also bijective, and it was briefly implemented, but it
+
+- _Reject non-canonical names._ Bijective, but turns a stray keystroke into an error page.
+- _Fixed-width names padded to 3197 characters._ Also bijective, and it was briefly implemented, but it
   makes every URL 3197 characters even for room 0 — a cost paid by every shared link to buy uniformity
   nobody sees.
 
@@ -142,9 +144,10 @@ worker queue is empty, which is deterministic where `waitForTimeout(2000)` is a 
 on a slow runner.
 
 **Alternatives rejected.**
-- *Pixel snapshots with a tolerance.* Tolerance wide enough to survive GPU differences is wide enough to
+
+- _Pixel snapshots with a tolerance._ Tolerance wide enough to survive GPU differences is wide enough to
   miss a wrongly positioned shelf.
-- *Headless GL in unit tests.* Tests the driver, not the code, and adds a native dependency to CI.
+- _Headless GL in unit tests._ Tests the driver, not the code, and adds a native dependency to CI.
 
 **Consequence.** Geometry correctness must be provable without rendering, so layout arithmetic lives in
 pure functions in `engine/` rather than inline in mesh construction.
@@ -188,7 +191,7 @@ function, `seedInput`, separate from the SHA-256 call that consumes it.
 **Why.** The property that matters is that distinct `(round, half)` pairs never produce the same
 seed bytes. If two did, two different addresses would share a round-function value, and the
 bijection would stop being one — silently, because SHA-256 would be behaving perfectly. Keeping
-the encoding separate from the hashing is what lets a test *decode* the bytes back into
+the encoding separate from the hashing is what lets a test _decode_ the bytes back into
 `(round, half)` and prove injectivity, instead of asserting it in a comment. That decoder is in
 `prf.test.ts`.
 
@@ -202,7 +205,7 @@ not hold:
   variable-length field and comes **last**. A byte string of that shape can be cut only one way,
   so the encoding is injective even with the length removed. The ambiguity the SPEC describes
   would be real if `xb` came before the round index, or if the tag were variable-length.
-- What the prefix buys concretely is that injectivity no longer *depends* on that layout. Add a
+- What the prefix buys concretely is that injectivity no longer _depends_ on that layout. Add a
   second variable-length field, reorder the fields, or make the tag configurable — all of which a
   later format revision might reasonably do — and a prefix-free concatenation collides
   immediately. With the length committed, the encoding stays self-delimiting whatever else is
@@ -214,9 +217,10 @@ rather than load-bearing, and a reader who works that out for themselves should 
 down here rather than conclude the SPEC is confused.
 
 **Alternatives rejected.**
-- *Drop the prefix, since the current layout is injective without it.* Saves nothing measurable
+
+- _Drop the prefix, since the current layout is injective without it._ Saves nothing measurable
   and makes a future field reordering silently catastrophic.
-- *Hash the fields separately and combine.* Equivalent, slower, and further from the SPEC text,
+- _Hash the fields separately and combine._ Equivalent, slower, and further from the SPEC text,
   which is the thing the golden vectors freeze.
 
 **Consequence.** `PRF_BYTES`, `DOMAIN_TAG` and the field order are quoted from the SPEC rather
@@ -248,13 +252,14 @@ which for `randomAddress` means some books being measurably more likely to open 
 draw is masked to the limit's exact bit width and retried on overflow, which for
 `limit = 36^3200` accepts about 85% of draws.
 
-A source is also *validated*: one that returns fewer bytes than asked is rejected rather than
+A source is also _validated_: one that returns fewer bytes than asked is rejected rather than
 quietly yielding a smaller, non-uniform value.
 
 **Alternatives rejected.**
-- *A required source argument.* Diverges from the SPEC's signature and makes the common call
+
+- _A required source argument._ Diverges from the SPEC's signature and makes the common call
   verbose for no gain.
-- *A module-level seedable PRNG.* Hidden mutable state in a layer whose whole value is that it has
+- _A module-level seedable PRNG._ Hidden mutable state in a layer whose whole value is that it has
   none.
 
 **Consequence.** `search` does not normalize its query either: `normalize` stays the caller's to
@@ -268,23 +273,23 @@ the page would then contain the normalized query rather than the string that was
 
 **Decision.** Three run modes exist and are configured separately:
 
-| Command | fast-check cases | Wall-clock budget asserted |
-|---|---|---|
-| `npm run test`, CI `verify` | 1000 | yes |
-| `npm run coverage` | 1000 | no |
-| `npm run test:mutation` | 10 | no |
+| Command                     | fast-check cases | Wall-clock budget asserted |
+| --------------------------- | ---------------- | -------------------------- |
+| `npm run test`, CI `verify` | 1000             | yes                        |
+| `npm run coverage`          | 1000             | no                         |
+| `npm run test:mutation`     | 10               | no                         |
 
 **Why.** Both deviations are about the measuring apparatus, not the code.
 
-*The wall-clock budget.* testing.md §5 fixes 5 ms for `getPage` and `locate`. The same call
+_The wall-clock budget._ testing.md §5 fixes 5 ms for `getPage` and `locate`. The same call
 measures ~0.7 ms uninstrumented, ~6 ms under v8 coverage and ~8 ms under Stryker's mutant
 switching. Asserting 5 ms in those modes would be asserting a property of the profiler. The budget
 is therefore asserted only in the uninstrumented run — which is the one CI's `verify` job runs on
 every push and every pull request, so the threshold is enforced, not waived. A test that runs in
-*all three* modes sits beside the skipped suite and exercises the same path, so a skipped timing
+_all three_ modes sits beside the skipped suite and exercises the same path, so a skipped timing
 assertion cannot hide a broken bijection.
 
-*The case count.* Stryker re-runs the suite once per mutant, and `src/core` produces ~600 of them.
+_The case count._ Stryker re-runs the suite once per mutant, and `src/core` produces ~600 of them.
 At 1000 cases per property the run is hours. Capping the budget at 10 cases under Stryker can
 only let a mutant **survive** that more cases would have killed, so it moves the reported score
 down, never up: the score is a floor. Were it the other way round this would be unacceptable.
@@ -302,10 +307,11 @@ Neither threshold itself is lowered. The 100% coverage floor on `src/core`, the 
 threshold, the 75% break point and the 5 ms budget are all unchanged.
 
 **Alternatives rejected.**
-- *Lower the property-test case count everywhere.* Trades a real guarantee for a faster suite.
-- *Scale the time budget by a measured instrumentation factor.* Invents a number, and the factor
+
+- _Lower the property-test case count everywhere._ Trades a real guarantee for a faster suite.
+- _Scale the time budget by a measured instrumentation factor._ Invents a number, and the factor
   varies with what is being instrumented.
-- *Assert no performance budget at all.* An accidental `O(n²)` radix conversion is exactly the
+- _Assert no performance budget at all._ An accidental `O(n²)` radix conversion is exactly the
   regression this project cannot see any other way.
 
 **Consequence.** `vite.config.ts` and `vitest.stryker.config.ts` each pass a flag down through
