@@ -30,3 +30,7 @@ pnpm-debug.log*
 # OS
 .DS_Store
 Thumbs.db
+
+# Mutation testing (Stryker)
+reports/
+.stryker-tmp/
