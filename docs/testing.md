@@ -63,6 +63,11 @@ codebase that gap is the whole risk. Stryker runs against `src/core` only:
 If a surviving mutant turns out to be genuinely equivalent, it is excluded with a comment explaining why.
 Silently lowering the threshold is not an option.
 
+**A reported survivor is a claim, not a finding.** Before acting on one, apply the mutation to the file
+by hand and run the suite: on `ae0af83` all five reported survivors were killed that way, and five
+identical runs of one mutant produced three different verdicts. False survivals can only lower the
+score, so the 85 threshold and the 75 break point stay trustworthy — but the survivor list does not.
+
 Stryker re-runs the suite once per mutant and `src/core` yields close to 600 of them, so the property
 tests are capped at 10 cases under Stryker alone (`src/core/__tests__/property-runs.ts`, ADR-0012). Fewer
 cases can only let a mutant _survive_ that more would have killed, so the reported score is a floor

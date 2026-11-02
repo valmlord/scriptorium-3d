@@ -28,6 +28,23 @@ export default defineConfig({
       ...baseConfig.test?.env,
       SCRIPTORIUM_STRYKER: '1',
     },
+    // Vitest's 5 s default is not a budget anyone chose, and it decided the
+    // mutation job by coin flip: on commit ae0af83 the dry run passed in CI run
+    // 41326395583 and timed out in 41326391660 — same code, two verdicts — on
+    // `roomToName / roomFromName round-trips over generated rooms` and
+    // `intToDigits round-trips through digitsToInt for arbitrary values`. Those
+    // take 416 ms and 423 ms here uninstrumented; Stryker's dry run runs them
+    // over 598 mutants' worth of coverage counters with per-test recording on
+    // top, which costs ~2.5x locally (net 6.8 s against 2.8 s) before the
+    // runner's own ~8x is applied.
+    //
+    // This is a hang guard, not a performance gate. The wall-clock budget lives
+    // in performance.test.ts and is enforced by `verify` (ADR-0013), and a slow
+    // *mutant* is still bounded by Stryker's own deadline — `timeoutMS` 15 s
+    // plus `timeoutFactor` 2 x the dry-run time, about 29 s — which fires
+    // first, so this ceiling only lifts the dry run. The same default was
+    // raised for the same reason in src/__tests__/layer-boundaries.test.ts.
+    testTimeout: 30_000,
     // Stryker mutates `src/core` (ADR-0008), so `src/core`'s own tests are
     // what judge the mutants. The two tests in `src/__tests__` drive the
     // ESLint API over throwaway files written into each layer directory, which

@@ -305,6 +305,16 @@ disturb the argument above: it never rested on what the number was.
 - _Assert no performance budget at all._ An accidental `O(n²)` radix conversion is exactly the
   regression this project cannot see any other way.
 
+**A third budget, found the hard way.** The two deviations above were chosen; Vitest's 5 s
+`testTimeout` was not, and it decided the mutation job by coin flip. On commit `ae0af83` the dry run
+passed in CI run 41326395583 and timed out in 41326391660 — the same code, two verdicts — on two
+property tests that take about 420 ms each uninstrumented. Stryker's dry run executes them over 598
+mutants' worth of coverage counters with per-test recording on top, which costs ~2.5x locally before
+the runner's own ~8x. `vitest.stryker.config.ts` now sets `testTimeout: 30_000`, above Stryker's own
+per-mutant deadline (`timeoutMS` 15 s plus `timeoutFactor` 2 x the dry-run time, about 29 s) so that
+slow mutants are still Stryker's to kill and only the dry run's ceiling moves. Verified by setting
+it to 50 ms and watching the dry run fail with the CI error verbatim.
+
 **Consequence.** `vite.config.ts` and `vitest.stryker.config.ts` each pass a flag down through
 `test.env`, because the v8 provider instruments through an inspector session that leaves no trace
 in the worker's own environment. Stryker also runs only `src/core`'s tests: the two tests in
