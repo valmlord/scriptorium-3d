@@ -57,16 +57,27 @@ codebase that gap is the whole risk. Stryker runs against `src/core` only:
 
 - `npm run test:mutation`, configured in `stryker.config.json`.
 - Threshold: **85% mutation score**, break the build below 75%.
-- Not on every push — it is minutes, not seconds. Nightly, and on any PR touching `src/core/**`;
-  the `changes` job in `.github/workflows/ci.yml` decides which.
+- **Nightly on `main`, and on demand** via `workflow_dispatch` — not on pushes or pull requests. The
+  run is 21 to 59 minutes and its verdict is not reproducible, so it is not a pre-merge gate
+  (ADR-0014).
+- The pull request path runs `npm run test:mutation:dry` instead: Stryker's dry run, about fifteen
+  seconds, which answers the one question a pull request can answer cheaply — does the harness still
+  start, instrument and get a green suite? It asserts the test count as well as the exit code,
+  because a broken dry run was observed reporting success on 43 of 229 tests.
 
 If a surviving mutant turns out to be genuinely equivalent, it is excluded with a comment explaining why.
 Silently lowering the threshold is not an option.
 
-**A reported survivor is a claim, not a finding.** Before acting on one, apply the mutation to the file
-by hand and run the suite: on `ae0af83` all five reported survivors were killed that way, and five
-identical runs of one mutant produced three different verdicts. False survivals can only lower the
-score, so the 85 threshold and the 75 break point stay trustworthy — but the survivor list does not.
+**The score is a floor, and the survivor list is not a finding.** Between two CI runs whose `src/`
+trees were identical, 56 of 587 distinct mutant positions changed verdict and the score moved 98.32
+to 93.43 — the whole of that drop is 31 kills that became survivals and 2 that went the other way.
+Hand-applying all five reported survivors on `ae0af83` killed every one of them, and five identical
+runs of one mutant produced three different verdicts.
+
+So the error runs one way: a false survival lowers the score, a false kill is the rare case (2
+positions against 31). `break: 75` can fire on noise but cannot go green over a real gap. Read the
+number as a lower bound and nothing more. Before acting on a named survivor, apply the mutation to
+the file by hand and run the suite — the report is a claim. This is issue #6, and it is open.
 
 Stryker re-runs the suite once per mutant and `src/core` yields close to 600 of them, so the property
 tests are capped at 10 cases under Stryker alone (`src/core/__tests__/property-runs.ts`, ADR-0012). Fewer
