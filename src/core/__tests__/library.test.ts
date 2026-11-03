@@ -14,12 +14,14 @@ import {
   fromLinear,
   toLinear,
   type Address,
+  type BookAddress,
 } from '../address';
 import { PAGE_ALPHABET, digitToSymbol, normalize } from '../alphabet';
 import { intToDigits } from '../bignum';
 import { toMinimalBytesBE } from '../prf';
 import {
   AddressBeyondLibraryError,
+  InvalidAddressError,
   InvalidPageLengthError,
   InvalidSearchOffsetError,
   InvalidSearchQueryError,
@@ -28,6 +30,7 @@ import {
 import {
   FORMAT_VERSION,
   TITLE_LENGTH,
+  TITLE_SHIFT,
   defaultRandomSource,
   getPage,
   getTitle,
@@ -66,6 +69,19 @@ const validAddress: fc.Arbitrary<Address> = validLinear.map(fromLinear);
 const validPage: fc.Arbitrary<string> = validLinear.map((value) =>
   intToDigits(value, PAGE_ALPHABET, PAGE_LENGTH)
 );
+
+/**
+ * A book the library holds: a page of it rounded down to the book it belongs
+ * to. Page 0 of any book containing at least one real page is itself real,
+ * which includes the last book of the partially filled final room — its page 0
+ * exists even though most of its 410 pages do not.
+ */
+const validBook: fc.Arbitrary<BookAddress> = validLinear.map((linear) => {
+  const { room, wall, shelf, volume } = fromLinear(
+    (linear / BigInt(PAGES_PER_BOOK)) * BigInt(PAGES_PER_BOOK)
+  );
+  return { room, wall, shelf, volume };
+});
 
 /**
  * A deterministic byte source, so that tests covering the two random
@@ -317,6 +333,100 @@ describe('getTitle', () => {
     expect(getTitle({ room: 7n, wall: 0, shelf: 0, volume: 0 })).not.toBe(
       getTitle({ room: 7n, wall: 0, shelf: 0, volume: 1 })
     );
+  });
+});
+
+/**
+ * `getTitle` reads the leading digits of page 0 without rendering the rest, so
+ * what has to hold is a fact about positional notation rather than anything
+ * about this library:
+ *
+ *     intToDigits(v / RADIX ** (PAGE_LENGTH - TITLE_LENGTH), …, TITLE_LENGTH)
+ *       === intToDigits(v, …, PAGE_LENGTH).slice(0, TITLE_LENGTH)
+ *
+ * Agreeing with the old implementation on a handful of addresses would only
+ * sample that; the identity is stated over the whole domain instead
+ * (testing.md §2), and it is asserted against the exported `TITLE_SHIFT` so
+ * that a wrong exponent in `library.ts` fails here rather than being copied
+ * into the test and agreeing with itself.
+ *
+ * Watched failing before being trusted: with the exponent off by one, in
+ * either direction, the property goes red on its first case.
+ */
+describe('a title is the leading digits of a page, not a whole page', () => {
+  it(
+    'renders the leading TITLE_LENGTH digits of every value in [0, LIBRARY_SIZE)',
+    () => {
+      fc.assert(
+        fc.property(validLinear, (value) => {
+          expect(intToDigits(value / TITLE_SHIFT, PAGE_ALPHABET, TITLE_LENGTH)).toBe(
+            intToDigits(value, PAGE_ALPHABET, PAGE_LENGTH).slice(0, TITLE_LENGTH)
+          );
+        }),
+        { numRuns: propertyRuns(1000) }
+      );
+    },
+    PROPERTY_TIMEOUT_MS
+  );
+
+  it('holds at 0, the page of 3200 index-0 symbols', () => {
+    // The shape where fixed-width radix conversion breaks: the whole page is
+    // padding, so the shifted value is 0 and must still render 25 symbols
+    // rather than the empty string.
+    const title = intToDigits(0n / TITLE_SHIFT, PAGE_ALPHABET, TITLE_LENGTH);
+
+    expect(title).toBe(SPACE.repeat(TITLE_LENGTH));
+    expect(title).toBe(
+      intToDigits(0n, PAGE_ALPHABET, PAGE_LENGTH).slice(0, TITLE_LENGTH)
+    );
+  });
+
+  it('holds at LIBRARY_SIZE - 1, the largest value a page can hold', () => {
+    // The other end: every digit is 35, so the shift must not carry anything
+    // out of the top of the title.
+    const value = LIBRARY_SIZE - 1n;
+
+    const title = intToDigits(value / TITLE_SHIFT, PAGE_ALPHABET, TITLE_LENGTH);
+
+    expect(title).toBe('.'.repeat(TITLE_LENGTH));
+    expect(title).toBe(
+      intToDigits(value, PAGE_ALPHABET, PAGE_LENGTH).slice(0, TITLE_LENGTH)
+    );
+  });
+
+  it(
+    'agrees with building page 0 and slicing it, over generated books',
+    () => {
+      // The identity above is the proof; this is the wiring. It runs fewer
+      // cases on purpose: every one of them costs two runs of the Feistel
+      // network, where a case of the property costs none, and no number of
+      // samples here would add to what the property already states over the
+      // full domain.
+      fc.assert(
+        fc.property(validBook, (book) => {
+          expect(getTitle(book)).toBe(
+            getPage({ ...book, page: 0 }).slice(0, TITLE_LENGTH)
+          );
+        }),
+        { numRuns: propertyRuns(200) }
+      );
+    },
+    PROPERTY_TIMEOUT_MS
+  );
+
+  it('still validates the address it is handed, as building the page did', () => {
+    // Skipping `getPage` must not skip `assertValidAddress` with it: the last
+    // book of the final room has a real page 0, but a book one past it does
+    // not exist at all.
+    const beyond: BookAddress = {
+      room: ROOM_COUNT,
+      wall: 0,
+      shelf: 0,
+      volume: 0,
+    };
+
+    expect(() => getTitle(beyond)).toThrow(InvalidAddressError);
+    expect(() => getTitle(beyond)).toThrow(/room/);
   });
 });
 

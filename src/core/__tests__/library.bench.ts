@@ -2,7 +2,7 @@ import { bench, describe } from 'vitest';
 import { LIBRARY_SIZE, PAGE_LENGTH, fromLinear } from '../address';
 import { PAGE_ALPHABET } from '../alphabet';
 import { intToDigits } from '../bignum';
-import { getPage, locate } from '../library';
+import { getPage, getTitle, locate } from '../library';
 
 /**
  * Reported numbers for `npx vitest bench`. The threshold is *asserted* in
@@ -29,6 +29,14 @@ const addresses = Array.from({ length: 64 }, (_unused, index) =>
 
 const pages = addresses.map((address) => getPage(address));
 
+/** The same spread of locations, as books: a title is page 0 of one. */
+const books = addresses.map(({ room, wall, shelf, volume }) => ({
+  room,
+  wall,
+  shelf,
+  volume,
+}));
+
 const edgePages = [
   intToDigits(0n, PAGE_ALPHABET, PAGE_LENGTH),
   intToDigits(LIBRARY_SIZE - 1n, PAGE_ALPHABET, PAGE_LENGTH),
@@ -41,6 +49,18 @@ describe('the bijection', () => {
     'getPage — address to 3200 characters',
     () => {
       getPage(cycle(addresses, forward++));
+    },
+    { time: 500 }
+  );
+
+  let title = 0;
+
+  // Against `getPage` above: both run the Feistel network in full, and the
+  // difference between them is the 3175 digits a title does not render.
+  bench(
+    'getTitle — book to its 25-character title',
+    () => {
+      getTitle(cycle(books, title++));
     },
     { time: 500 }
   );

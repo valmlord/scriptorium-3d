@@ -38,6 +38,24 @@ export const FORMAT_VERSION = 1;
 /** A book's title is the first 25 characters of its page 0 (SPEC §5). */
 export const TITLE_LENGTH = 25;
 
+/**
+ * The divisor that discards everything of page 0 that a title does not show:
+ * one radix-36 digit for each of the `PAGE_LENGTH - TITLE_LENGTH` characters
+ * below the title, so `36 ** 3175`.
+ *
+ * `intToDigits` renders the most significant digit first, so the leading
+ * `TITLE_LENGTH` digits of a page are exactly the `TITLE_LENGTH`-digit
+ * rendering of the page's value divided by this — positional notation, the
+ * same fact that makes `1234 / 10 ** 2 === 12`. One `bigint` division
+ * therefore replaces the 3175 digit conversions a title would otherwise
+ * produce and throw away.
+ *
+ * It is exported so that the property test asserting that identity can assert
+ * it against this value rather than against a second copy of the exponent: a
+ * number has one home (ADR-0013).
+ */
+export const TITLE_SHIFT = BigInt(RADIX) ** BigInt(PAGE_LENGTH - TITLE_LENGTH);
+
 /** How the remainder of a search page is filled (SPEC §5). */
 export type PadMode = 'spaces' | 'random';
 
@@ -90,8 +108,20 @@ export const defaultRandomSource: RandomSource = (byteLength: number): Uint8Arra
  * not a short page.
  */
 export function getPage(address: Address): string {
+  return intToDigits(pageValue(address), PAGE_ALPHABET, PAGE_LENGTH);
+}
+
+/**
+ * The forward direction of the bijection on its own (SPEC §4.4): the validated
+ * address, linearised and encrypted, before anything is rendered as text.
+ *
+ * It exists because there are two renderings of that one value — `getPage`
+ * converts all `PAGE_LENGTH` digits of it, `getTitle` only the leading
+ * `TITLE_LENGTH` — and the sequence they share should not be written twice.
+ */
+function pageValue(address: Address): bigint {
   assertValidAddress(address);
-  return intToDigits(encrypt(toLinear(address)), PAGE_ALPHABET, PAGE_LENGTH);
+  return encrypt(toLinear(address));
 }
 
 /**
@@ -120,9 +150,17 @@ export function locate(page: string): Address {
  * A book's title: the first 25 characters of its page 0 (SPEC §5). Defining a
  * title this way is what makes searching for a title a special case of
  * `search` rather than a second mechanism with an index of its own.
+ *
+ * It does not build page 0 to then discard 3175 of its characters. The leading
+ * digits of a radix conversion are available without the trailing ones, so the
+ * page's value is shifted down by `TITLE_SHIFT` and rendered at title width —
+ * the same string, one division instead of 3175 digit conversions. The Feistel
+ * network still runs in full: it is the format (ADR-0003) and it is most of
+ * what a title costs.
  */
 export function getTitle(book: BookAddress): string {
-  return getPage({ ...book, page: 0 }).slice(0, TITLE_LENGTH);
+  const firstPage = pageValue({ ...book, page: 0 });
+  return intToDigits(firstPage / TITLE_SHIFT, PAGE_ALPHABET, TITLE_LENGTH);
 }
 
 /**
