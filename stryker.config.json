@@ -12,6 +12,8 @@
     "fileName": "reports/mutation/index.html"
   },
   "coverageAnalysis": "perTest",
+  "ignoreStatic": false,
+  "ignoreStatic_comment": "Written out although `false` is the default, because an unset option is how this one became unexaminable (ADR-0023): it was proposed twice and measured three times while invisible here, and until the runner upgrade neither of its branches in mutant-test-planner.ts was reachable at all. Measured both ways on a1ea587: `true` saves 2m23s of a 9m10s run and clears six false survivors, and pays 93 mutants moved to `Ignored` \u2014 90 of which this suite kills \u2014 in the alphabet table and the address arithmetic. The score rises 0.62 points by measuring 15% less, which is the figure ADR-0008 bought the tool to avoid. Requires `coverageAnalysis: \"perTest\"`, which options-validator.ts checks; nothing checks that coverage was actually produced.",
   "mutate": [
     "src/core/**/*.ts",
     "!src/core/index.ts",

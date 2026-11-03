@@ -1091,3 +1091,117 @@ that is only a canonical form if serialising twice from the same address yields 
 sequence is a refusal (`UndecodableParameterError`) rather than a replacement character, and the
 round trip over queries built from Cyrillic text and from the scheme's own delimiters is a property
 test rather than a set of examples.
+
+---
+
+## ADR-0023 — Static mutants are measured, not ignored
+
+**Decision.** `ignoreStatic` stays **off**, and is written out as `"ignoreStatic": false` in
+`stryker.config.json` rather than left to the default, with a comment naming this record. The 125
+static mutants in `src/core` stay in the scored denominator.
+
+**Why.** Two corrections before the figures, because the option has been discussed three times on a
+premise that was wrong each time.
+
+First: **the option was never set.** It is not in `stryker.config.json` and never has been, and
+`stryker-schema.json` gives it `"default": false`, so the committed behaviour has always been
+`false`. Second: until `d6e4cfa` it could not have mattered either way. Under the previous runner no
+coverage map reached Stryker core (ADR-0017), `TestCoverage.hasCoverage` was `!!staticCoverage` and
+therefore `false`, and `mutant-test-planner.js` never entered the branch that reads the option — so
+**both** of its branches were unreachable for every mutant in the project, and every measurement
+anyone took of it was a measurement of something else. That is issue #25. Since the upgrade the
+planner flags 125 static mutants of 614 and warns that they account for about 62% of the run, so the
+option has an observable effect for the first time, and the question is whether to turn it **on**.
+
+**The measurement.** Two full runs of `a1ea587`, same configuration in every other respect, run
+sequentially so neither competed with the other for the four cores. Node 22.23.4, Stryker 9.6.1,
+`concurrency: 4`, on an Intel Xeon at 2.10 GHz — **not** `ubuntu-latest`, so the absolute durations
+belong to this machine and the ratio between them is the transferable part (ADR-0013).
+
+|                             | `false` (committed) | `true`        |
+| --------------------------- | ------------------- | ------------- |
+| **duration**                | **9m10s**           | **6m47s**     |
+| wall clock, including start | 552 s               | 408 s         |
+| tests per mutant            | 7.37                | 4.00          |
+| instrumented                | 614                 | 614           |
+| `Ignored`                   | 4                   | **97**        |
+| scored denominator          | **610**             | **517**       |
+| killed / timeout / survived | 546 / 26 / 38       | 468 / 20 / 29 |
+| no coverage                 | 0                   | 0             |
+| **score**                   | **93.77**           | **94.39**     |
+
+Paired on mutant id, every difference is accounted for and none of it is noise about the option:
+
+- **93 `Ignored`** that were not: 89 `Killed → Ignored`, 1 `Timeout → Ignored`, 3
+  `Survived → Ignored`. These are the purely static mutants — static coverage, no `coveredBy` — and
+  **90 of the 93 were being detected.**
+- **6 `Survived → Killed`**: `prf.ts:98` twice, `alphabet.ts:48` twice, `alphabet.ts:50` twice. These
+  are the hybrid mutants — static coverage _and_ real per-test coverage — which `ignoreStatic` moves
+  onto their covering tests under runtime activation. Four of them are the `alphabet.ts` lines issue
+  #6 opened about, and this is the demonstration that #6 was right about them.
+- 7 `Timeout → Killed` and 2 `Killed → Timeout`, which are score-neutral and are the run-to-run
+  flapping ADR-0018 measured.
+- **No new survivors at all.**
+
+**So what the option buys, exactly: 2m23s and six honest survivors, for 93 mutants.** Of those 93,
+90 are ones this suite kills. Turning it on would relabel them `Ignored` — a truthful "not measured"
+rather than a false accusation, but not a kill either — and would shrink what the tool measures by
+**15% of the scored set** while the printed score went _up_ 0.62 points. A number that rises because
+the denominator fell is the kind of figure ADR-0008 bought this tool to avoid producing.
+
+**And the 93 are not in incidental code.** By file: `alphabet.ts` 88 (74 purely static, 14 hybrid),
+`address.ts` 21 (11 / 10), `prf.ts` 15 (7 / 8), `library.ts` 1. They are static because
+`buildAlphabet` runs at import to construct `PAGE_ALPHABET` and the address arithmetic is reached
+while test modules initialise — that is, the alphabet table of ADR-0001 and the linearisation of
+SPEC §3, which are exactly the two places where being silently wrong replaces every book in the
+library without failing anything.
+
+**The run length was the only argument for it, and it is gone.** 9m10s against 6m47s is 2m23s on a
+run that is nightly, not on anybody's critical path (ADR-0014). It is worth saying plainly that this
+is probably the whole story of why the option kept being proposed: it was first raised against a
+47m52s run that `coverageAnalysis: "perTest"` was silently causing, where 62% of the time was a real
+cost. Fix the cause and the saving is two minutes a night.
+
+**A correction to #25's second point, which the measurement refutes.** That issue asks for the
+record that "a static mutant is not killable by a suite that imports the module once". As a
+generalisation about this project that is false: with `ignoreStatic` off, **116 of the 125 static
+mutants are detected** — 114 killed and 2 timed out. The claim holds for nine of them, six hybrid
+and three purely static, and not for the rest. What _is_ true, and is the part worth writing down,
+is the other half: the planner's static handling is reachable only when coverage data exists, so an
+absent coverage map presents as "nothing is static" rather than as an error. Before reasoning about
+`static`, `coveredBy` or `ignoreStatic` in any future survivor investigation, confirm the report
+contains coverage data at all.
+
+**Alternatives rejected.**
+
+- _`ignoreStatic: true`._ The measurement above: 2m23s and six recovered false survivals against 93
+  mutants, 90 of them currently killed, in the alphabet table and the address arithmetic.
+- _Leave it unset, since `false` is the default._ An unset option is how this one became
+  unexaminable: it was proposed twice, measured three times and discussed in two issues while being
+  invisible in the repository. The explicit `false` and its comment cost two lines and make the
+  decision findable where it is applied.
+- _`coverageAnalysis: "all"`._ Removes the per-test attribution the hybrid fix depends on, so the 32
+  hybrids become indistinguishable from purely static ones, and costs the hour ADR-0014's correction
+  describes.
+- _Excluding the nine undetected static mutants with `// Stryker disable`._ Those comments are for
+  mutants that are genuinely equivalent, with the reason written beside them (`library.ts:259`,
+  `prf.ts:96`). None of these nine is equivalent; six of them are killed by their own covering tests
+  the moment the planner is allowed to run them that way, which makes them a reporting artefact, and
+  the remaining three are an untested branch of the address arithmetic.
+
+**Consequence.** The survivor list overstates by six: `prf.ts:98` and the four `alphabet.ts` lines
+are reported as survivors on every run and are killed by the suite when the mutation is applied by
+hand. That is the price of keeping 93 mutants measured, it is bounded and named, and testing.md §4
+already requires a survivor to be hand-applied before it is acted on — which is precisely the check
+that catches these six.
+
+**Open: can the hybrid mutants be run on their covering tests without ignoring the purely static
+ones?** `mutant-test-planner.js` bundles the two behaviours behind one flag: its first branch takes
+`!isStatic || (ignoreStatic && coveredBy.length)` and its second `Ignored`s everything else static,
+so there is no configuration that selects the first without the second. Were there, the answer here
+would be trivially yes — six false survivals removed, 93 mutants kept, and about 2m23s of the saving
+with them. Nothing in this repository can settle that; it is an upstream shape, and the thing to put
+to Stryker is whether the hybrid case deserves its own option. Recorded rather than acted on because
+the workaround costs nothing a reader is not already told to do, and because patching the planner
+locally would make this project's score incomparable with its own history. Issues #6 and #25 carry
+the six named mutants.
