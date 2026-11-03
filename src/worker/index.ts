@@ -11,4 +11,5 @@ export * from './protocol';
 export * from './handler';
 export * from './cache';
 export * from './errors';
+export * from './response';
 export * from './loop';
