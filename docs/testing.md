@@ -56,9 +56,14 @@ Coverage says a line ran. It does not say an assertion would have noticed it bei
 codebase that gap is the whole risk. Stryker runs against `src/core` only:
 
 - `npm run test:mutation`, configured in `stryker.config.json`.
-- Threshold: **85% mutation score**, break the build below 75%.
-- **Nightly on `main`, and on demand** via `workflow_dispatch` — not on pushes or pull requests. The
-  run is 21 to 70 minutes, which is why it is not a pre-merge gate (ADR-0014).
+- Thresholds: **`high` 93, `low` 92, `break` 92**, calibrated on the measured run-to-run spread
+  rather than chosen as round numbers (ADR-0018). `break` is the only one that decides the exit
+  code.
+- **Nightly on `main`, and on demand** via `workflow_dispatch` — not on pushes or pull requests.
+  ADR-0014 took it off that path when a run cost 21 to 70 minutes. Since ADR-0017 a run is about ten
+  minutes, so that reason has largely gone; it has not been reinstated as a pre-merge gate because
+  the ten minutes is one measurement on one developer machine and every CI duration on record
+  predates the upgrade. That is the open question ADR-0014 now names.
 - The pull request path runs `npm run test:mutation:dry` instead: Stryker's dry run, a 34-second job
   that adds nothing to the critical path, which answers the one question a pull request can answer
   cheaply — does the harness still start, instrument and get a green suite? It asserts the test
@@ -69,8 +74,9 @@ If a surviving mutant turns out to be genuinely equivalent, it is excluded with 
 Silently lowering the threshold is not an option.
 
 **The score moves by about two tenths of a point between runs, and a named survivor is a claim.**
-Two runs of the identical commit `e43d09b`, launched concurrently, scored 93.10 and 93.27; across
-the four runs taken since `d2aa600` the spread is 0.33. That is the whole of the run-to-run noise.
+Eight full runs of unchanged `main` span 0.49 points, and two runs of the identical commit
+`e43d09b`, launched concurrently, scored 93.10 and 93.27. The score is a pure function of the
+survivor count, so that whole spread is three survivors (ADR-0018).
 
 An earlier version of this section reported a five-point swing and called the verdict
 irreproducible. It was wrong: the swing was caused by `d2aa600` raising `testTimeout` from 5 s to
@@ -81,13 +87,18 @@ inflated; `~93` is the honest number.
 Before acting on a named survivor, apply the mutation to the file by hand and run the suite — not
 because the report lies, but because the property tests run at 10 cases under Stryker and 1000
 everywhere else (ADR-0012), so a survivor may be one that 1000 cases would have killed. This is
-issue #6, and it is open — what remains is the residual 0.2 points and where `break` should sit now
-that it is defending against that rather than against six.
+issue #6, and it is open. `break` has since been set from that measurement (ADR-0018); what remains
+is whether the residual fraction of a point survives on a second machine.
 
-Stryker re-runs the suite once per mutant and `src/core` yields close to 600 of them, so the property
-tests are capped at 10 cases under Stryker alone (`src/core/__tests__/property-runs.ts`, ADR-0012). Fewer
-cases can only let a mutant _survive_ that more would have killed, so the reported score is a floor
-rather than an inflation; every other run uses the full 1000.
+`src/core` yields close to 600 mutants, so the property tests are capped at 10 cases under Stryker
+alone (`src/core/__tests__/property-runs.ts`, ADR-0012). Fewer cases can only let a mutant _survive_
+that more would have killed, so the reported score is a floor rather than an inflation; every other
+run uses the full 1000.
+
+The cap was introduced when Stryker re-ran the whole suite against every mutant. It no longer does:
+since ADR-0017 each mutant runs against its own covering tests, about seven of the 239 the Stryker
+configuration collects. Whether the cap is still worth its cost is therefore an open question and
+not a settled one — it has not been re-measured since the upgrade.
 
 The cap is applied per `fc.assert`, not through `fc.configureGlobal({ numRuns })`: fast-check lets an
 explicit `numRuns` override the global one, and every property test here passes one, so a global cap
