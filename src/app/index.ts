@@ -1,4 +1,5 @@
 // App layer exports
-// (Placeholder for M0 bootstrap)
+// M8: the URL codec (address <-> fragment) and its refusals.
 
-export {};
+export * from './errors';
+export * from './url';
