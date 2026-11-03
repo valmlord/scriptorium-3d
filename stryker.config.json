@@ -19,10 +19,11 @@
     "!src/core/__fixtures__/**"
   ],
   "thresholds": {
-    "high": 90,
-    "low": 85,
-    "break": 75
+    "high": 93,
+    "low": 92,
+    "break": 92
   },
+  "thresholds_comment": "Calibrated on the measured run-to-run spread, on the machine that enforces it (ADR-0013); the runs are in issue #6. Only `break` decides the exit code, and it fires on `score < break` unrounded. The scored denominator is fixed by the mutant set, so the score moves in whole survivors: `break` is set to tolerate several times the largest spread ever observed, which is a few survivors, while still failing on a regression an order of magnitude smaller than the previous value could detect. `low` equals `break` so the report turns red exactly when the build breaks rather than colouring a nearly-breaking score green, and `high` sits above the whole observed range so green means `within noise of the floor`. Stryker validates only `high >= low`, so a `break` above `low` would be accepted silently and is what this avoids.",
   "timeoutMS": 15000,
   "timeoutFactor": 2,
   "concurrency": 4,
