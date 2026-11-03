@@ -289,3 +289,83 @@ jobs:
         with:
           name: mutation-report
           path: reports/mutation/
+
+  test-durations-a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Runner image
+        run: 'echo "image: $ImageOS/$ImageVersion"'
+      - name: Run 1
+        run: npx vitest run --reporter=./duration-reporter.ts
+      - name: Run 2
+        run: npx vitest run --reporter=./duration-reporter.ts
+      - name: Run 3
+        run: npx vitest run --reporter=./duration-reporter.ts
+
+  test-durations-b:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Runner image
+        run: 'echo "image: $ImageOS/$ImageVersion"'
+      - name: Run 1
+        run: npx vitest run --reporter=./duration-reporter.ts
+      - name: Run 2
+        run: npx vitest run --reporter=./duration-reporter.ts
+      - name: Run 3
+        run: npx vitest run --reporter=./duration-reporter.ts
+
+  test-durations-a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Runner image
+        run: 'echo "image: $ImageOS/$ImageVersion"'
+      - name: Run 1
+        run: npx vitest run --reporter=./duration-reporter.mjs
+      - name: Run 2
+        run: npx vitest run --reporter=./duration-reporter.mjs
+      - name: Run 3
+        run: npx vitest run --reporter=./duration-reporter.mjs
+
+  test-durations-b:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Runner image
+        run: 'echo "image: $ImageOS/$ImageVersion"'
+      - name: Run 1
+        run: npx vitest run --reporter=./duration-reporter.mjs
+      - name: Run 2
+        run: npx vitest run --reporter=./duration-reporter.mjs
+      - name: Run 3
+        run: npx vitest run --reporter=./duration-reporter.mjs
