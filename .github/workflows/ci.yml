@@ -8,8 +8,86 @@ on:
       - 'fix/**'
       - 'chore/**'
   pull_request:
+  schedule:
+    # Nightly mutation run (ADR-0008), at 02:17 UTC — off the hour, because
+    # every job scheduled on the hour queues behind everyone else's.
+    - cron: '17 2 * * *'
+  # `schedule` fires only on the default branch, so without this a feature
+  # branch could not get a mutation score at all before it merged (ADR-0014).
+  workflow_dispatch:
 
 jobs:
+  format:
+    # Its own job rather than a step inside `verify`, for two reasons. A red check
+    # named `format` says what is wrong before anyone opens a log, where a red
+    # `verify` could be any of four things. And an independent job still reports when
+    # `verify` has failed for an unrelated reason, so one push surfaces both problems
+    # instead of hiding the drift behind a type error.
+    #
+    # `npm run verify` runs `format:check` as well, so a local run catches drift
+    # before a push. That is the convenience; this job is the authority
+    # (code-style.md section 8). Until this existed, the only enforcement was
+    # `lint-staged` through the Husky pre-commit hook, which sees the files one local
+    # commit stages and nothing else -- and four documents had been unformatted since
+    # dd0c833 without CI noticing.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Say how to fix it
+        if: failure()
+        run: |
+          echo "::error::Prettier reported unformatted files above. Run 'npm run format' and commit the result."
+
+  shell-lint:
+    # `ubuntu-latest` ships ShellCheck, so this job needs neither `npm ci` nor a Node
+    # setup: checkout, then the same command a developer runs. Until it existed,
+    # `scripts/check-mutation-harness.sh` -- the gate on the pull request path of every
+    # pull request (ADR-0014) -- was reviewed by eye and by nothing else, and
+    # `.lintstagedrc.json` had no `*.sh` entry to catch it locally either.
+    #
+    # This job is the only thing that lints shell, deliberately. A `*.sh` entry in
+    # `.lintstagedrc.json` makes `lint-staged` spawn `shellcheck`, which is not a
+    # declared dependency: on a machine without it the hook fails with "Task failed to
+    # spawn: shellcheck ENOENT" and blocks the commit instead of linting it. Adding the
+    # npm wrapper as a `devDependency` is not the fix either -- it downloads a binary in
+    # a postinstall script, and code-style.md section 7 makes a new dependency a decision
+    # to record, not one to slip into a CI change. So the hook stays the convenience it is
+    # called in code-style.md section 8 and this job stays the authority. (The note lives
+    # here because `.lintstagedrc.json` is strict JSON: a `"//"` key would be read as a
+    # glob with a command, which is the `_comment_timeout` pattern this repository keeps
+    # removing.)
+    #
+    # The version is printed because ShellCheck's default check set grows between
+    # releases. A finding that turns up without a diff to explain it is then traceable
+    # to a runner image bump instead of being a mystery, which is the cost of taking
+    # the preinstalled binary rather than pinning one.
+    #
+    # Default severity and the default check set, deliberately. `--enable=all` adds
+    # SC2250 on every unbraced expansion in that script and finds nothing else; a gate
+    # whose findings are all taste is a gate people learn to silence.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ShellCheck version
+        run: shellcheck --version
+
+      - name: Lint shell scripts
+        run: npm run lint:shell
+
   verify:
     runs-on: ubuntu-latest
     strategy:
@@ -92,6 +170,125 @@ jobs:
         with:
           name: playwright-report
           path: playwright-report/
+
+  generation-cost:
+    # What a page, a title, a `locate` and a 32-title shelf cost on the machine
+    # that enforces this project's review gates. It never fails on a slow
+    # number, and it does fail if the measurement cannot be taken.
+    #
+    # ADR-0005 justified moving generation into a worker with "~1.3 ms" a page
+    # and "~42 ms" a shelf and named no machine for either, and the three
+    # machines measured since differ by close to a factor of ten -- so neither
+    # figure could be reproduced or refuted. ADR-0013 is the rule that forbids
+    # that: a performance number is calibrated on the machine that enforces it.
+    # This job is where the `ubuntu-latest` half of that comes from, and
+    # M3's review gate ("32 shelf titles drop no frame") is what needs it.
+    #
+    # Deliberately not a gate *on the figures*. There is no threshold in it:
+    # no median it reads can turn this check red, however slow. What does turn
+    # it red is the measurement failing to happen at all -- Vitest erroring, or
+    # a report that is missing, unparseable or holds no benchmarks, which
+    # `report-generation-cost.ts` checks for by hand. That distinction is the
+    # whole point. A number nobody took is not a number, and a job that went
+    # green on one would publish an empty table and read as a pass, which is
+    # the failure ADR-0014 found in the mutation harness.
+    #
+    # The budget that fails a build on a slow number is testing.md section 5's,
+    # asserted in `performance.test.ts` and enforced by `verify` on every push.
+    # A second threshold here would sit on the runner's own value, which is the
+    # arrangement ADR-0013 removed after it failed one run at 5.052 ms and
+    # passed the next -- and `ubuntu-latest` draws more than one CPU model, so
+    # it would be worse than that one was. A green check beside a published
+    # number is worth less than the number, so the number is what this job
+    # produces.
+    #
+    # The table goes to `$GITHUB_STEP_SUMMARY`, which GitHub renders on the run
+    # page: the figures are readable without opening a log, which is the only
+    # way a reader will find them six months from now. The JSON is attached as
+    # well, for anyone who wants the distribution rather than the summary.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Measure and publish generation cost
+        run: npm run bench:report
+
+      - name: Upload benchmark report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: generation-cost
+          path: bench-report.json
+
+  mutation-dry-run:
+    # The cheap half of the mutation harness: does Stryker still start, find its
+    # files, and get a green suite out of the instrumented run? That is exactly
+    # what broke on ae0af83, where it took two CI runs on one commit before the
+    # failure was even visible. Measured on run 41473984542: 34 seconds for the
+    # whole job, 20 of them the dry run itself, against the full run's
+    # twenty-one to fifty-nine minutes. It also adds nothing to the critical
+    # path, which `e2e` holds at 109 seconds -- so this is what the pull request
+    # path gets (ADR-0014).
+    #
+    # Deliberately unconditional. Gating it on which files changed would buy
+    # back a job that runs in parallel with a longer one anyway, and cost the
+    # skipped-job dependency subtlety the deleted `changes` job was written to
+    # work around.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check the mutation harness still runs
+        run: npm run test:mutation:dry
+
+  mutation:
+    # The full run is twenty-one to fifty-nine minutes and its verdict is not
+    # reproducible: 56 of 587 mutant positions changed verdict between two runs
+    # whose `src/` trees were identical, moving the score 98.32 to 93.43. A gate
+    # that swings five points on unchanged code does not belong on the pull
+    # request path, so it is nightly on `main` plus `workflow_dispatch` for a
+    # branch that wants a number before it merges (ADR-0014, issue #6).
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run mutation testing
+        run: npm run test:mutation
+
+      - name: Upload mutation report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutation-report
+          path: reports/mutation/
 
   test-durations-a:
     runs-on: ubuntu-latest
