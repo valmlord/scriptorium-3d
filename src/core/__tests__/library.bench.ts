@@ -38,8 +38,8 @@ import { getPage, getTitle, locate } from '../library';
  *
  * 50 is chosen for what a median of 50 rules out: a scheduler hiccup has to
  * take 26 of the samples to move it, where a single reading or a median of
- * three can be moved by one. At one to fifty milliseconds a task that costs
- * well under a second each.
+ * three can be moved by one. A task here costs one to fifty milliseconds, so
+ * 50 of them is well under a second apiece.
  *
  * What it does **not** buy is agreement between runs. Measured on a shared
  * 4 vCPU container, the `getPage` median over 50 samples varied 9% across
