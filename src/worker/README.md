@@ -18,17 +18,36 @@ Worker client. The thread boundary: calls `@core` at runtime and sends/receives 
 - `cache.ts` — the LRU cache the client reads through, on the main thread in front of the worker.
   Pages and titles are separate stores with separate ceilings **in bytes**, keyed by the linear
   address rendered as a string. Recency is the order of use, never a clock.
-
-Still to come in M3: the client that owns the `Worker`, issues the monotonic request ids, fans a
-shelf out over 32 single-address requests, reads through the cache and rejects a cancelled request
-with a named domain error (ADR-0016).
+- `errors.ts` — the named domain errors a request can end with instead of a result: cancelled,
+  failed in `@core`, refused as stale or malformed, or unanswerable because the thread is gone.
+  `@core`'s own classes do not survive `postMessage`, so the name travels as data and is rebuilt
+  here.
+- `response.ts` — the other direction of the wire narrowed from `unknown`. A message from the worker
+  is untrusted data crossing a boundary just as a payload to it is.
+- `loop.ts` — the message loop that runs the handler on the thread. It queues requests, answers a
+  cancellation on arrival, and **yields to the event loop** between slices of about 4 ms, which is
+  what lets a cancellation be read at all. Transport-agnostic: `attachWorkerLoop` narrows a worker
+  scope and wires it up.
+- `entry.ts` — the module `new Worker(...)` loads. One expression. **Not exported from
+  `index.ts`**, because importing it runs it.
+- `client.ts` — the client that owns the `Worker`. Issues the monotonic request ids, reads through
+  `GenerationCache` before the boundary rather than behind it, fans a shelf out over 32
+  single-address requests and aggregates them, rejects a cancelled request with
+  `CancelledRequestError` and ignores the reply that was already in flight (ADR-0016), and warms up
+  on one throwaway page at a fixed address.
 
 ## What cannot be imported
 
 - `three`
 - `gsap`
-- `window.performance` and other frame-critical APIs
 - `@engine`, `@motion`, `@state`, `@ui` — the worker client does not reach into the scene or UI
+
+Nothing here reaches for a main-thread frame API: no `requestAnimationFrame`, no reading the
+renderer's timings, nothing that belongs to the loop this layer exists to keep clear.
+`loop.ts` does read `performance.now()`, and that is the one deliberate exception: it is the
+worker's own monotonic clock, used for nothing but bounding how long the thread may compute before
+handing the event loop back, and the alternative — counting requests instead of milliseconds —
+would be a budget that varied by a factor of two between the machines in ADR-0005.
 
 ## Imports allowed
 
