@@ -17,6 +17,40 @@ on:
   workflow_dispatch:
 
 jobs:
+  format:
+    # Its own job rather than a step inside `verify`, for two reasons. A red check
+    # named `format` says what is wrong before anyone opens a log, where a red
+    # `verify` could be any of four things. And an independent job still reports when
+    # `verify` has failed for an unrelated reason, so one push surfaces both problems
+    # instead of hiding the drift behind a type error.
+    #
+    # `npm run verify` runs `format:check` as well, so a local run catches drift
+    # before a push. That is the convenience; this job is the authority
+    # (code-style.md section 8). Until this existed, the only enforcement was
+    # `lint-staged` through the Husky pre-commit hook, which sees the files one local
+    # commit stages and nothing else -- and four documents had been unformatted since
+    # dd0c833 without CI noticing.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Say how to fix it
+        if: failure()
+        run: |
+          echo "::error::Prettier reported unformatted files above. Run 'npm run format' and commit the result."
+
   verify:
     runs-on: ubuntu-latest
     strategy:
