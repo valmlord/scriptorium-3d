@@ -58,6 +58,18 @@ jobs:
     # pull request (ADR-0014) -- was reviewed by eye and by nothing else, and
     # `.lintstagedrc.json` had no `*.sh` entry to catch it locally either.
     #
+    # This job is the only thing that lints shell, deliberately. A `*.sh` entry in
+    # `.lintstagedrc.json` makes `lint-staged` spawn `shellcheck`, which is not a
+    # declared dependency: on a machine without it the hook fails with "Task failed to
+    # spawn: shellcheck ENOENT" and blocks the commit instead of linting it. Adding the
+    # npm wrapper as a `devDependency` is not the fix either -- it downloads a binary in
+    # a postinstall script, and code-style.md section 7 makes a new dependency a decision
+    # to record, not one to slip into a CI change. So the hook stays the convenience it is
+    # called in code-style.md section 8 and this job stays the authority. (The note lives
+    # here because `.lintstagedrc.json` is strict JSON: a `"//"` key would be read as a
+    # glob with a command, which is the `_comment_timeout` pattern this repository keeps
+    # removing.)
+    #
     # The version is printed because ShellCheck's default check set grows between
     # releases. A finding that turns up without a diff to explain it is then traceable
     # to a runner image bump instead of being a mystery, which is the cost of taking
