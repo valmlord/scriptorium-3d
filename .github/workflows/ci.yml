@@ -173,7 +173,8 @@ jobs:
 
   generation-cost:
     # What a page, a title, a `locate` and a 32-title shelf cost on the machine
-    # that enforces this project's review gates. It reports; it never fails.
+    # that enforces this project's review gates. It never fails on a slow
+    # number, and it does fail if the measurement cannot be taken.
     #
     # ADR-0005 justified moving generation into a worker with "~1.3 ms" a page
     # and "~42 ms" a shelf and named no machine for either, and the three
@@ -183,12 +184,23 @@ jobs:
     # This job is where the `ubuntu-latest` half of that comes from, and
     # M3's review gate ("32 shelf titles drop no frame") is what needs it.
     #
-    # Deliberately not a gate. The budget that fails a build is testing.md
-    # section 5's, asserted in `performance.test.ts` and enforced by `verify` on
-    # every push; a second threshold here would sit on the runner's own value,
-    # which is the arrangement ADR-0013 removed after it failed one run at
-    # 5.052 ms and passed the next. A green check beside a published number is
-    # worth less than the number, so the number is what this job produces.
+    # Deliberately not a gate *on the figures*. There is no threshold in it:
+    # no median it reads can turn this check red, however slow. What does turn
+    # it red is the measurement failing to happen at all -- Vitest erroring, or
+    # a report that is missing, unparseable or holds no benchmarks, which
+    # `report-generation-cost.ts` checks for by hand. That distinction is the
+    # whole point. A number nobody took is not a number, and a job that went
+    # green on one would publish an empty table and read as a pass, which is
+    # the failure ADR-0014 found in the mutation harness.
+    #
+    # The budget that fails a build on a slow number is testing.md section 5's,
+    # asserted in `performance.test.ts` and enforced by `verify` on every push.
+    # A second threshold here would sit on the runner's own value, which is the
+    # arrangement ADR-0013 removed after it failed one run at 5.052 ms and
+    # passed the next -- and `ubuntu-latest` draws more than one CPU model, so
+    # it would be worse than that one was. A green check beside a published
+    # number is worth less than the number, so the number is what this job
+    # produces.
     #
     # The table goes to `$GITHUB_STEP_SUMMARY`, which GitHub renders on the run
     # page: the figures are readable without opening a log, which is the only

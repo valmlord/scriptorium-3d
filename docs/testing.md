@@ -128,7 +128,8 @@ fixed in the bench file, so it does not vary with how fast the machine is — an
 table with the runner's CPU model, core count and Node version beside them. The `generation-cost` job
 publishes that table to the run summary, where GitHub shows it on the run's own page: a figure nobody
 can find without opening a log is a figure nobody will find, and one that names no machine is not
-evidence at all (ADR-0013). **That job never fails**, deliberately. The run-to-run spread of those
+evidence at all (ADR-0013). **No figure that job reports can fail the build, however slow; a
+measurement it cannot take does fail it.** Both halves are deliberate. The run-to-run spread of those
 medians is the runner's own drift between runs and does not shrink as the sample count grows, so a
 threshold built on them would decide by luck rather than by the code — which is the whole of what
 ADR-0013 took out of the budget above. The budget above is the only gate.

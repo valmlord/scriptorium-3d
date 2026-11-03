@@ -99,7 +99,7 @@ models, and the Intel one is 34% faster on a page. They are reported separately 
 because the average of two machines is a machine that does not exist. Within one model the figures
 are reproducible — the four AMD runs span 0.8% on a page and 2.6% on a shelf — so the gap between
 the columns is the hardware, not the apparatus. Which is also why the job that produces these
-figures reports and does not gate: a threshold here would be decided by which host the runner drew.
+figures carries no threshold of its own: one here would be decided by which host the runner drew.
 
 **A shelf is one and a half to two frames, and the camera is usually flying while those titles are
 being resolved** — so they are frames the user sees go missing. That is the argument for the thread,

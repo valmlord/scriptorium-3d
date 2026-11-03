@@ -12,11 +12,16 @@
  * answers that for the machine that matters to a review gate: the runner,
  * whose CPU model and Node version it prints beside the numbers.
  *
- * **It reports and never fails.** The enforcing gate is the committed budget
- * of testing.md §5, asserted in `src/core/__tests__/performance.test.ts`. A
- * second gate here would be a threshold sitting on the runner's own value,
- * which is exactly the arrangement ADR-0013 removed after it failed one CI run
- * at 5.052 ms and passed the next.
+ * **No number it reports can fail the build; a measurement it cannot take
+ * will.** There is no threshold here, so no median turns the job red however
+ * slow — the gate on a slow number is the committed budget of testing.md
+ * §5, asserted in `src/core/__tests__/performance.test.ts`, and a second one
+ * here would sit on the runner's own value, which is the arrangement ADR-0013
+ * removed after it failed one CI run at 5.052 ms and passed the next. But this
+ * script does exit non-zero when Vitest errors, or the report is missing,
+ * unparseable or empty of benchmarks, because a job that stayed green through
+ * that would publish an empty table and read as a pass — the failure
+ * ADR-0014 found in the mutation harness.
  *
  * Run with:  npm run bench:report
  */
@@ -243,9 +248,10 @@ function render(rows: readonly BenchmarkResult[], cold: ColdStart): string {
   return [
     '## Generation cost',
     '',
-    'Measured on this runner, by `npm run bench:report`. **This job reports; it never fails.**',
-    'The budget that does fail a build is the one in `testing.md` §5, asserted by the `verify`',
-    'job — a second threshold sitting on the runner’s own value is what ADR-0013 removed.',
+    'Measured on this runner, by `npm run bench:report`. **No figure below can fail this job,',
+    'however slow; a measurement that could not be taken does fail it.** The gate on a slow',
+    'number is the budget in `testing.md` §5, asserted by the `verify` job — a second',
+    'threshold sitting on the runner’s own value is what ADR-0013 removed.',
     '',
     describeMachine(),
     '',
