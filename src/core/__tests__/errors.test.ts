@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest';
+import { PAGE_LENGTH } from '../address';
 import {
   AddressBeyondLibraryError,
   InvalidAddressError,
   InvalidPageLengthError,
+  InvalidSearchOffsetError,
   UnknownSymbolError,
   ValueOutOfDomainError,
 } from '../errors';
@@ -85,5 +87,21 @@ describe('ValueOutOfDomainError', () => {
     expect(err.length).toBe(3200);
     expect(err.message).toContain('radix 36');
     expect(err.name).toBe('ValueOutOfDomainError');
+  });
+});
+
+describe('InvalidSearchOffsetError', () => {
+  it('states the requirement as an integer in range, which a fraction also fails', () => {
+    // `search` refuses 1.5, and 1.5 *is* in [0, 3195]. A message naming the
+    // range on its own would therefore assert something false about the very
+    // value it is reporting, and send the reader after a bound that had not
+    // been crossed. The compound predicate holds for all three rejected
+    // shapes -- negative, fractional, past the end -- and this assertion is
+    // what keeps the wording from regressing to the range alone.
+    const err = new InvalidSearchOffsetError(1.5, 5, PAGE_LENGTH - 5);
+
+    expect(err.message).toBe(
+      'Search offset 1.5 is not an integer in [0, 3195] for a query of length 5'
+    );
   });
 });
