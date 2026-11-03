@@ -12,6 +12,9 @@ on:
     # Nightly mutation run (ADR-0008), at 02:17 UTC — off the hour, because
     # every job scheduled on the hour queues behind everyone else's.
     - cron: '17 2 * * *'
+  # `schedule` fires only on the default branch, so without this a feature
+  # branch could not get a mutation score at all before it merged (ADR-0014).
+  workflow_dispatch:
 
 jobs:
   verify:
@@ -97,59 +100,44 @@ jobs:
           name: playwright-report
           path: playwright-report/
 
-  changes:
-    # Does this event concern the layer Stryker is responsible for? This job
-    # must not be conditional: a skipped job counts as an unmet dependency in
-    # GitHub Actions, so gating it with `if:` would silently skip the nightly
-    # mutation run along with it. The schedule case is answered here instead.
+  mutation-dry-run:
+    # The cheap half of the mutation harness: does Stryker still start, find its
+    # files, and get a green suite out of the instrumented run? That is exactly
+    # what broke on ae0af83, where it took two CI runs on one commit before the
+    # failure was even visible. Measured on run 41473984542: 34 seconds for the
+    # whole job, 20 of them the dry run itself, against the full run's
+    # twenty-one to fifty-nine minutes. It also adds nothing to the critical
+    # path, which `e2e` holds at 109 seconds -- so this is what the pull request
+    # path gets (ADR-0014).
+    #
+    # Deliberately unconditional. Gating it on which files changed would buy
+    # back a job that runs in parallel with a longer one anyway, and cost the
+    # skipped-job dependency subtlety the deleted `changes` job was written to
+    # work around.
     runs-on: ubuntu-latest
-    outputs:
-      core: ${{ steps.filter.outputs.core }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Detect changes under src/core
-        id: filter
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          BASE_REF: ${{ github.base_ref }}
-          BEFORE: ${{ github.event.before }}
-        run: |
-          set -euo pipefail
-          core=false
-          case "$EVENT_NAME" in
-            schedule)
-              # The nightly run covers src/core whether or not it changed.
-              core=true
-              ;;
-            pull_request)
-              git fetch --no-tags origin "$BASE_REF"
-              base="$(git merge-base "origin/$BASE_REF" HEAD)"
-              if ! git diff --quiet "$base" HEAD -- src/core; then
-                core=true
-              fi
-              ;;
-            push)
-              # A branch's first push has an all-zero `before` and nothing to
-              # diff against. The pull request for that branch runs this job
-              # again with a real base, so there is nothing to miss.
-              if git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
-                if ! git diff --quiet "$BEFORE" HEAD -- src/core; then
-                  core=true
-                fi
-              fi
-              ;;
-          esac
-          echo "core=$core" >> "$GITHUB_OUTPUT"
-          echo "src/core touched: $core"
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check the mutation harness still runs
+        run: npm run test:mutation:dry
 
   mutation:
-    # Mutation testing is minutes, not seconds (ADR-0008), so it does not run
-    # on every push — only when src/core changed, and nightly regardless.
-    needs: changes
-    if: needs.changes.outputs.core == 'true'
+    # The full run is twenty-one to fifty-nine minutes and its verdict is not
+    # reproducible: 56 of 587 mutant positions changed verdict between two runs
+    # whose `src/` trees were identical, moving the score 98.32 to 93.43. A gate
+    # that swings five points on unchanged code does not belong on the pull
+    # request path, so it is nightly on `main` plus `workflow_dispatch` for a
+    # branch that wants a number before it merges (ADR-0014, issue #6).
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

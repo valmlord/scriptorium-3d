@@ -131,8 +131,10 @@ pure functions in `engine/` rather than inline in mesh construction.
 
 ## ADR-0008 — Mutation testing on `core`
 
-**Decision.** Stryker runs against `src/core` only, nightly and on any PR touching it. Score threshold 85%,
-build breaks below 75%.
+**Decision.** Stryker runs against `src/core` only. Score threshold 85%, build breaks below 75%.
+
+_Where it runs was changed by ADR-0014:_ nightly on `main` and on demand, not on the pull request path.
+The thresholds and the scope below are unaffected.
 
 **Why.** Coverage proves a line executed; it says nothing about whether an assertion would have caught it
 being wrong. That distinction is usually academic — here it is the entire risk, because a subtly broken
@@ -362,3 +364,65 @@ honest is to not have them: each now cites testing.md §5 instead of repeating i
 stands, but its reason is no longer arithmetic: ~6 ms and ~8 ms both fit inside 25 ms, so the
 assertion would now pass there. The reason that survives is the one testing.md §5 gives — a timing
 taken through an instrumented build measures the instrumentation.
+---
+
+## ADR-0014 — The full mutation run leaves the pull request path
+
+**Decision.** The full Stryker run is **nightly on `main` and on `workflow_dispatch`**, not on pushes
+or pull requests. What the pull request path gets instead is `npm run test:mutation:dry`
+(`scripts/check-mutation-harness.sh`): Stryker's dry run, about fifteen seconds, asserting both its
+exit code and that it ran every test the config collects. The score is read as a **floor**, not a
+measurement, and the survivor list is not a to-do list. The `changes` job in `ci.yml` is deleted,
+having had no other consumer.
+
+**Why.** The run costs 21 to 59 minutes, measured over four CI runs, and its verdict is not
+reproducible. Between runs 41392938348 and 41394049476 — whose `src/` trees are identical, the
+second commit touching only `vitest.stryker.config.ts` and two documents — **56 of 587 distinct
+mutant positions changed verdict**: 31 `Killed → Survived`, 18 `Killed → Timeout`, 5
+`Timeout → Killed`, 2 `Survived → Killed`. A timeout counts as killed, so only the survival moves
+touch the score: −31 +2 over 594 scored mutants is 4.88 points, which is the whole of the
+98.32 → 93.43 drop. A gate that swings five points on unchanged code decides by luck, which is what
+ADR-0013 removed from the performance budget for the same reason.
+
+The direction of the error is one-sided, and that is what makes a floor usable: 31 false survivals
+against 2 positions that could be a false kill, and hand-applying all five reported survivors on
+`ae0af83` killed every one of them. So `break: 75` can fire on noise but cannot go green over a real
+gap. The score is still worth having. It is not worth an hour per pull request.
+
+What the pull request path actually needs to catch is the harness breaking, which is what happened on
+`ae0af83`: Vitest's unexamined 5 s per-test default timed out the dry run, the `push` and
+`pull_request` runs of one commit disagreed, and it took two runs before the failure was even
+visible. The dry run catches that in fifteen seconds.
+
+**Why the check asserts a test count and not just an exit code.** With the dry run deliberately
+broken, six of seven observed runs exited 1 — and the seventh printed `Initial test run succeeded.
+Ran 43 tests`, a pass on a suite that had silently lost 186 of its 229. Exit code alone is a gate
+that green-lights a truncated run. The expected count comes from `vitest list` against the same
+config, so no floor is written down to rot: both sides see `SCRIPTORIUM_STRYKER=1` and both drop the
+same skipped work. Verified by mutating the comparison by hand and watching it go red.
+
+**Alternatives rejected.**
+
+- _Keep the full run on pull requests and widen the margin._ The swing is the problem, not the
+  threshold. A wider margin makes a noisy gate quieter without making it informative, and still
+  spends the hour.
+- _`coverageAnalysis: "all"`._ This does remove the unstable component — per-test attribution is
+  what moves — but it runs every test against every mutant. At 594 mutants and concurrency 4 the
+  current run already reaches 59 minutes with attribution narrowing the work.
+- _Lower the concurrency._ Untested as a remedy, and it buys stability, if any, with more wall
+  clock.
+- _Gate the dry run on which files changed._ It costs fifteen seconds. Gating it would buy those
+  back and pay the skipped-job dependency subtlety the `changes` job was written to work around.
+- _Drop mutation testing._ ADR-0008's reason stands: for a bijection with no user, no log and no
+  exception, coverage cannot tell whether an assertion would have noticed.
+
+**Consequence.** A genuine score regression now lands in `main` and is caught within 24 hours rather
+than before the merge. That is the cost of this decision, stated plainly; it is accepted because the
+pre-merge gate it replaces produced false reds more often than true ones. A failing scheduled run
+notifies the repository owner through GitHub's own default, so no extra machinery is added.
+
+`schedule` fires only on the default branch, so a feature branch cannot get a score from it at all —
+hence `workflow_dispatch`, which is how a branch asks for a number before it merges.
+
+Issue #6 stays open. This decision changes where the run happens and how its output is read; it does
+not fix the attribution instability that makes the output what it is.
