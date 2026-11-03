@@ -24,12 +24,12 @@ readable spread.
 36 symbols. **The order is part of the format** — a symbol's index is its digit value, so reordering the
 table replaces every book in the library.
 
-| Index | Symbols |
-|---|---|
-| 0 | `` ` `` (space, U+0020) |
-| 1–33 | `а б в г д е ё ж з и й к л м н о п р с т у ф х ц ч ш щ ъ ы ь э ю я` |
-| 34 | `,` |
-| 35 | `.` |
+| Index | Symbols                                                             |
+| ----- | ------------------------------------------------------------------- |
+| 0     | `` ` `` (space, U+0020)                                             |
+| 1–33  | `а б в г д е ё ж з и й к л м н о п р с т у ф х ц ч ш щ ъ ы ь э ю я` |
+| 34    | `,`                                                                 |
+| 35    | `.`                                                                 |
 
 All 33 Russian letters are present, `ё` and `ъ` included. Lower case only.
 
@@ -164,16 +164,25 @@ link ever shared.** Consequences, all mandatory:
 ```ts
 export const FORMAT_VERSION = 1;
 
-export interface Address { room: bigint; wall: number; shelf: number; volume: number; page: number }
+export interface Address {
+  room: bigint;
+  wall: number;
+  shelf: number;
+  volume: number;
+  page: number;
+}
 export type BookAddress = Omit<Address, 'page'>;
 
-export function getPage(address: Address): string;             // exactly 3200 chars
-export function locate(page: string): Address;                 // input must be exactly 3200 chars
-export function getTitle(book: BookAddress): string;           // first 25 chars of page 0
+export function getPage(address: Address): string; // exactly 3200 chars
+export function locate(page: string): Address; // input must be exactly 3200 chars
+export function getTitle(book: BookAddress): string; // first 25 chars of page 0
 export function randomAddress(): Address;
 
 export type PadMode = 'spaces' | 'random';
-export interface SearchHit { address: Address; offset: number } // offset = where the query starts
+export interface SearchHit {
+  address: Address;
+  offset: number; // where the query starts
+}
 
 export function search(query: string, mode: PadMode, offset?: number): SearchHit;
 ```

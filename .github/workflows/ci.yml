@@ -17,6 +17,77 @@ on:
   workflow_dispatch:
 
 jobs:
+  format:
+    # Its own job rather than a step inside `verify`, for two reasons. A red check
+    # named `format` says what is wrong before anyone opens a log, where a red
+    # `verify` could be any of four things. And an independent job still reports when
+    # `verify` has failed for an unrelated reason, so one push surfaces both problems
+    # instead of hiding the drift behind a type error.
+    #
+    # `npm run verify` runs `format:check` as well, so a local run catches drift
+    # before a push. That is the convenience; this job is the authority
+    # (code-style.md section 8). Until this existed, the only enforcement was
+    # `lint-staged` through the Husky pre-commit hook, which sees the files one local
+    # commit stages and nothing else -- and four documents had been unformatted since
+    # dd0c833 without CI noticing.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Say how to fix it
+        if: failure()
+        run: |
+          echo "::error::Prettier reported unformatted files above. Run 'npm run format' and commit the result."
+
+  shell-lint:
+    # `ubuntu-latest` ships ShellCheck, so this job needs neither `npm ci` nor a Node
+    # setup: checkout, then the same command a developer runs. Until it existed,
+    # `scripts/check-mutation-harness.sh` -- the gate on the pull request path of every
+    # pull request (ADR-0014) -- was reviewed by eye and by nothing else, and
+    # `.lintstagedrc.json` had no `*.sh` entry to catch it locally either.
+    #
+    # This job is the only thing that lints shell, deliberately. A `*.sh` entry in
+    # `.lintstagedrc.json` makes `lint-staged` spawn `shellcheck`, which is not a
+    # declared dependency: on a machine without it the hook fails with "Task failed to
+    # spawn: shellcheck ENOENT" and blocks the commit instead of linting it. Adding the
+    # npm wrapper as a `devDependency` is not the fix either -- it downloads a binary in
+    # a postinstall script, and code-style.md section 7 makes a new dependency a decision
+    # to record, not one to slip into a CI change. So the hook stays the convenience it is
+    # called in code-style.md section 8 and this job stays the authority. (The note lives
+    # here because `.lintstagedrc.json` is strict JSON: a `"//"` key would be read as a
+    # glob with a command, which is the `_comment_timeout` pattern this repository keeps
+    # removing.)
+    #
+    # The version is printed because ShellCheck's default check set grows between
+    # releases. A finding that turns up without a diff to explain it is then traceable
+    # to a runner image bump instead of being a mystery, which is the cost of taking
+    # the preinstalled binary rather than pinning one.
+    #
+    # Default severity and the default check set, deliberately. `--enable=all` adds
+    # SC2250 on every unbraced expansion in that script and finds nothing else; a gate
+    # whose findings are all taste is a gate people learn to silence.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ShellCheck version
+        run: shellcheck --version
+
+      - name: Lint shell scripts
+        run: npm run lint:shell
+
   verify:
     runs-on: ubuntu-latest
     strategy:

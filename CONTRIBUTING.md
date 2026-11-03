@@ -28,15 +28,15 @@ git switch -c feat/core-feistel-bijection
 
 `<type>/<scope>-<short-description-in-kebab-case>`
 
-| Type | Use for |
-|---|---|
-| `feat` | new functionality |
-| `fix` | bug fix |
+| Type       | Use for                                |
+| ---------- | -------------------------------------- |
+| `feat`     | new functionality                      |
+| `fix`      | bug fix                                |
 | `refactor` | code change with no behavioural change |
-| `perf` | optimisation |
-| `test` | tests only |
-| `docs` | documentation only |
-| `chore` | infrastructure, dependencies, CI |
+| `perf`     | optimisation                           |
+| `test`     | tests only                             |
+| `docs`     | documentation only                     |
+| `chore`    | infrastructure, dependencies, CI       |
 
 `<scope>` is a layer or area: `core`, `worker`, `engine`, `motion`, `state`, `ui`, `app`, `infra`, `ci`,
 `docs`.
