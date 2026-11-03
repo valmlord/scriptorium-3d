@@ -12,7 +12,10 @@ import viteConfig from '../../vite.config';
  *
  * So the first test asserts the ceiling the runner **applied to itself**
  * against what the config declares — not that the key is present, which is
- * also what a key the tool discards looks like. The rest assert that nothing
+ * also what a key the tool discards looks like. The effective figure comes
+ * from `getCurrentTest()` in `vitest/suite`, Vitest's advanced API: the only
+ * place the resolved per-test timeout is readable from inside a test, and the
+ * reason this assertion is about behaviour rather than about a config object. The rest assert that nothing
  * outside the config quietly narrows either ceiling, which is what
  * `layer-boundaries.test.ts` had started doing the moment the config's own
  * figure passed its 20 s override.

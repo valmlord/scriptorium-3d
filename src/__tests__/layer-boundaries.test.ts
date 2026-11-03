@@ -13,12 +13,12 @@ import { resolve } from 'path';
 // that overran the 5 s default and failed the coverage job while `verify`, which
 // runs the same tests uninstrumented, stayed green.
 //
-// The `beforeAll` below is the heaviest hook in the repository and the figure
-// `vite.config.ts` calibrated its `hookTimeout` on: 2.1 to 3.6 s plain and 4.4
-// to 9.3 s under coverage, measured over twelve runs on three `ubuntu-latest`
-// CPU models (ADR-0028). 60 s is 6.4x the worst of those, against the config's
-// 5.4x, and that extra margin is what this line is for — the one hook whose
-// cost is a whole TypeScript program keeps a ceiling of its own.
+// The `beforeAll` below is the heaviest hook in the repository, and the one
+// `vite.config.ts` calibrated its own `hookTimeout` on: its worst observation
+// there is 9.3 s under coverage (ADR-0028, which has the runs). 60 s is 6.4x
+// that against the config's 5.4x, and the extra margin is what this line is
+// for — the one hook whose cost is a whole TypeScript program keeps a ceiling
+// of its own.
 //
 // The per-test `testTimeout: 20_000` that stood here is gone: the twenty tests
 // in this file sum to about 1.2 s under coverage and none of them reached the

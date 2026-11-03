@@ -60,8 +60,8 @@ import type { ProtocolResponse, RequestId } from '../protocol';
 // the slowest test in this file is 610 ms and the `beforeAll` build is 45 to
 // 94 ms, so against the chosen ceilings in `vite.config.ts` — 25 s and 50 s —
 // those figures were 41x and 530x anything this file has been observed to do.
-// A number that large is not a budget, it is decoration, and this repository
-// has removed ten of those. The config's ceilings govern this file.
+// A number that large is not a budget, it is decoration, which is the shape
+// this repository keeps removing. The config's ceilings govern this file.
 
 /** Where the bundled worker entry is written. Inside `node_modules`, as Stryker's is. */
 const BUILD_DIR = resolve('node_modules/.worker-integration-build');
