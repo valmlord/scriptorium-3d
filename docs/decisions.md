@@ -1337,3 +1337,68 @@ own share of a shelf is 0.75 to 0.95 ms, which is the figure that could have sun
 puts anything above ~1 ms on the worker, and the fan-out plus 32 response handlers sits just under it.
 The assertion that closes the gate is the one testing.md §5 already specifies, through the debug hook,
 and it belongs to M4/M5. No threshold is added anywhere from the figures above, for ADR-0013's reason.
+
+---
+
+## ADR-0025 — A generation call returns a cancellable handle, not a promise
+
+**Decision.** Every `GenerationClient` call returns a `GenerationRequest<T>` — `ids`, `result`,
+`cancel()` — rather than a bare promise, and rather than taking an `AbortSignal` the caller owns.
+`cancel()` is idempotent and a no-op once the call has settled. Request ids are monotonic integers
+owned by the client, never a timestamp and never random (architecture §5).
+
+**Why.** ADR-0016 settled that a cancelled request **rejects** rather than hanging, and deferred the
+`AbortSignal` because it moves the bookkeeping into `ui/` for a single call site. This record is the
+other half of that: what was built instead, and why the handle carries what it carries.
+
+**A handle rather than a plain promise, because cancellation names ids and not addresses.** The same
+address may be in flight under two ids while a camera passes a shelf twice (`protocol.ts`), so
+"cancel the request for this address" is not a well-formed instruction — it names either both or
+neither, and which one the caller meant is information only the caller has. A handle is that
+information, held by the one object that has it.
+
+**`ids` is the set actually issued, which is not always one and not always more than zero.** A shelf
+issues up to `BOOKS_PER_SHELF` of them; a call served entirely from the cache issues none and never
+touches the worker, because ADR-0019 puts the cache in front of the boundary rather than behind it. A
+caller never has to branch on which happened — `cancel()` is meaningful either way — and `ids` is
+there for the case that wants to know, such as a test asserting that a hit did not cross the thread.
+
+**The race against the reply is won by one rule: an id leaves the pending table the moment it is
+cancelled.** A reply the worker had already computed then arrives, finds nothing to settle, and
+changes nothing — it is not cached, nothing resolves on it, and **no set of cancelled ids has to be
+kept** in order to recognise it, because ids are monotonic and never reused. That is also why
+`cancel-ack` is a no-op for all three of its dispositions: the client has already done everything the
+acknowledgement could tell it to do. A no-op there is a result of rejecting on the spot, not an
+oversight, and it is worth writing down because it looks like one.
+
+**Admission to the cache happens in a `then` on the request's own promise, not in the response
+handler.** It is the same mechanism seen from the other side: cancellation rejects, so the admission
+never runs. ADR-0019 states that keeping a cancelled result out of the cache is the **client's** to
+enforce, because `cache.ts` holds no opinion about request ids; this is the enforcement, and it is one
+line rather than a check that a future response kind could forget.
+
+The behaviour is measured rather than argued, through a real thread, in ADR-0024's table: 32 titles
+requested, the second half cancelled when the first answer comes back, **16 computed and 16
+`dropped`, all 16 `pre-emptive`**. The dispositions are the part that discriminates — a `dropped`
+response can only be produced for a request refused before `core` was called.
+
+**Alternatives rejected.**
+
+- _An `AbortSignal` the caller owns._ ADR-0016's reason, unchanged: closer to the platform, and worth
+  revisiting when there is a second call site. That is still open there rather than re-decided here.
+- _A bare promise._ Cancelling then has to name an address, which does not identify a request.
+- _A promise that never settles for a cancelled request._ ADR-0016 rejected it: a retained
+  continuation per cancelled request, growing with exactly the camera motion the feature exists for.
+- _Keeping a set of cancelled ids so a late reply can be recognised._ Unnecessary once the id leaves
+  the pending table, and it is the same unbounded growth in a smaller container.
+- _One batch message per shelf instead of 32 single-address requests._ Cheaper on the wire and it
+  cannot express the cancellation of part of itself, which is the normal case — some of a shelf's 32
+  titles have arrived and some are still queued in the worker. Aggregating in the client is what lets
+  a half-cached shelf issue only what it must.
+- _A `locate` cache keyed by the page._ Separate decision, ADR-0026.
+
+**Consequence.** `GenerationClient.pendingCount` is the main-thread half of the `waitForIdle()` that
+testing.md §7 specifies; the worker-side half is `WorkerLoop.whenIdle` (ADR-0024). Cancellation is
+asserted by outcome throughout, per ADR-0016, so no test in this layer waits on a duration — the
+integration test waits on an exact message count instead, which the protocol's one-response-per-message
+rule makes exact.
