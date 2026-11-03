@@ -179,7 +179,10 @@ pure functions in `engine/` rather than inline in mesh construction.
 **Decision.** Stryker runs against `src/core` only. Score threshold 85%, build breaks below 75%.
 
 _Where it runs was changed by ADR-0014:_ nightly on `main` and on demand, not on the pull request path.
-The thresholds and the scope below are unaffected.
+_The thresholds were changed by ADR-0018:_ `break` is 92, with `low` 92 and `high` 93, calibrated on
+fifteen observed runs rather than on a swing that turned out to have a cause. The 85 and 75 above are
+the figures this decision was taken with and are kept for that reason; they are not the figures in
+force. The scope below is unaffected by either.
 
 **Why.** Coverage proves a line executed; it says nothing about whether an assertion would have caught it
 being wrong. That distinction is usually academic — here it is the entire risk, because a subtly broken
@@ -368,8 +371,9 @@ not one.
 
 Neither threshold itself is lowered. The 100% coverage floor on `src/core`, the 85% mutation
 threshold, the 75% break point and the wall-clock budget are all unchanged by this decision.
-The budget's figure was later recalibrated for an unrelated reason (ADR-0013), which does not
-disturb the argument above: it never rested on what the number was.
+The budget's figure was later recalibrated for an unrelated reason (ADR-0013), and the two mutation
+thresholds for another (ADR-0018); neither disturbs the argument above, which never rested on what
+any of those numbers was.
 
 **Alternatives rejected.**
 
@@ -531,6 +535,27 @@ pull request gate, and that reason was always sufficient on its own.
 
 Issue #6 stays open, with its premise corrected: what remains to establish is the residual 0.2
 points and where `break` should sit now that it is defending against that rather than against six.
+
+`break` has since been set, on that corrected premise: ADR-0018 puts it at 92 from fifteen observed
+runs. What stays open in issue #6 is the residual 0.2 points, and whether a machine that has stopped
+drifting would justify tightening further.
+
+**Correction, 2026-11-03: the hour this record rests on was an artefact, and has not been
+re-measured on the machine that pays it.** The cost above — 21 to 70 minutes over six CI runs, and
+the eight runs in ADR-0018 spanning 36m39s to 73m14s — was the cost of running the entire suite
+against every mutant, which is what `coverageAnalysis: "perTest"` was silently doing (ADR-0017).
+With that fixed the same work took **9m43s** on one developer machine.
+
+This does not reinstate the pull request gate, and nothing here moves it, for a reason worth stating
+precisely rather than assuming either way: **9m43s was measured once, outside CI, on one machine.**
+Every duration this record and ADR-0018 quote was taken on `ubuntu-latest`, and no full run has been
+timed there since the upgrade. So what the nightly run costs on the machine that actually runs it is
+unmeasured, and the premise of this decision is neither confirmed nor refuted — it is simply no
+longer evidenced. Whether the full run can return to the pull request path is therefore open, and
+the thing to measure is a `workflow_dispatch` run on `ubuntu-latest` under 9.6.1, not another run on
+a laptop. Until then the dry run stays the pull request's gate, which it earns on its own terms:
+it catches the harness breaking, which is what the pull request path needs and what a score cannot
+tell it.
 
 **Correction, 2026-11-03: the `coverageAnalysis: "all"` rejection rested on a false baseline.**
 The alternative above is rejected on the grounds that `"all"` "runs every test against every
@@ -728,3 +753,101 @@ while `hasStaticCoverage` was false for everything; and a non-zero `overhead` in
 lockfile churn is confined to the runner's own dev tree. The score is unchanged at 93.77, so the
 nightly gate of ADR-0014 could not regress across the upgrade, and the thresholds that gate rests on
 became measurable for the first time, which is ADR-0018.
+
+---
+
+## ADR-0018 — The mutation thresholds are calibrated on measured spread
+
+**Decision.** `break: 92`, `low: 92`, `high: 93`, replacing `85 / 75` and the band under them.
+
+**Why.** `break: 75` was sized for a five-point swing that does not exist — ADR-0014's correction
+has the cause — and at 75 the gate cannot report any regression a reviewer would care about.
+
+The arithmetic is exact rather than approximate, which is what makes the question answerable. The
+mutant set is constant at **614 instrumented, 4 `Ignored`, 610 scored** in every run observed, so
+the score is a pure function of the survivor count and moves in steps of **0.164 points per
+survivor**:
+
+```
+38 survivors -> 93.77      40 survivors -> 93.44
+39 survivors -> 93.61      41 survivors -> 93.28
+```
+
+So a threshold is not really a percentage; it is a number of spurious survivors it agrees to
+tolerate:
+
+| `break`     | fires at         | vs. floor (38) | points below floor |
+| ----------- | ---------------- | -------------- | ------------------ |
+| 75 (before) | 153 survivors    | +115           | 18.77              |
+| 90          | 62 survivors     | +24            | 3.77               |
+| **92**      | **49 survivors** | **+11**        | **1.77**           |
+| 93          | 43 survivors     | +5             | 0.77               |
+| 93.5        | 40 survivors     | +2             | 0.27               |
+
+At 75 the gate needs 153 survivors out of 610 to fire: about a fifth of the scored set, and 115
+above the floor. That is decoration rather than a loose threshold.
+
+**The measurement.** Eight full runs of unchanged `main` (`6786120`), launched as concurrent
+`workflow_dispatch` runs on `ubuntu-latest` — the machine that enforces the threshold, which is what
+ADR-0013 requires of a calibration — each on its own runner:
+
+| run                                                                                | score | survivors | duration |
+| ---------------------------------------------------------------------------------- | ----- | --------- | -------- |
+| [41638125915](https://github.com/valmlord/scriptorium-3d/actions/runs/41638125915) | 93.28 | 41        | 73m14s   |
+| [41638154186](https://github.com/valmlord/scriptorium-3d/actions/runs/41638154186) | 93.77 | 38        | 69m49s   |
+| [41638158324](https://github.com/valmlord/scriptorium-3d/actions/runs/41638158324) | 93.77 | 38        | 70m57s   |
+| [41638163380](https://github.com/valmlord/scriptorium-3d/actions/runs/41638163380) | 93.61 | 39        | 64m47s   |
+| [41638241444](https://github.com/valmlord/scriptorium-3d/actions/runs/41638241444) | 93.44 | 40        | 38m50s   |
+| [41638246095](https://github.com/valmlord/scriptorium-3d/actions/runs/41638246095) | 93.77 | 38        | 73m02s   |
+| [41638250824](https://github.com/valmlord/scriptorium-3d/actions/runs/41638250824) | 93.61 | 39        | 69m45s   |
+| [41638321218](https://github.com/valmlord/scriptorium-3d/actions/runs/41638321218) | 93.77 | 38        | 36m39s   |
+
+Spread **0.49** (93.28–93.77), mean 93.63, median 93.69, sd 0.184, **n = 8**. Seven further runs on
+one machine — one on this configuration and six on the upgraded runner of ADR-0017 — all returned 38
+survivors with a byte-identical survivor set. So across **fifteen observations the floor is 38 and
+the worst is 41**, and the noise is one-sided: it only ever adds survivors, never removes one.
+
+**Why 92 and not tighter.** 93 fires at 43 survivors, two above the worst run actually observed.
+With n = 8 that is not margin, it is the ADR-0013 mistake in a different file — a threshold sitting
+on the enforcing machine's own observed value, deciding by scheduler luck. 92 fires at 49: eight
+clear of the worst run and roughly four times the largest measured spread.
+
+**Why 92 and not looser.** 90 needs 24 extra survivors, 3.77 points. The regressions worth catching
+here are not orders of magnitude — a deleted assertion frees a handful of mutants, not a hundred —
+so the margin has to be a small multiple of the noise rather than merely comfortable. 92 still fails
+on a regression of eleven mutants where 75 needed a hundred and fifteen.
+
+**Why `low` and `high` move with it.** Stryker validates only `high >= low`, so a `break` above
+`low` is accepted silently. Left at `low: 85`, the report would colour a score 1.77 points from
+breaking green and never turn red before the build failed. `low: 92` makes red mean exactly "this
+breaks"; `high: 93` sits above the entire observed range, the worst run at 93.28 included, so green
+keeps meaning "within noise of the floor" and the yellow band becomes a genuine early warning rather
+than dead space.
+
+**Alternatives rejected.**
+
+- _Leave `break` at 75._ Defensible while the score was believed to swing five points. It is not
+  now: the swing had a cause, the cause is fixed, and ADR-0014's own argument against a gate that
+  decides by luck now points the other way.
+- _93, or 93.5._ Two and five survivors of margin over the worst observation, on n = 8 across
+  machines. See above.
+- _90._ Three and three-quarter points of margin to catch regressions that are worth a handful.
+- _A per-file threshold for `errors.ts`._ Stryker enforces none, and the file is a real test gap
+  rather than a calibration problem; see the consequence below.
+
+**Consequence.** The nightly run on `main` now fails on a regression of eleven mutants instead of a
+hundred and fifteen. Per ADR-0014 that failure lands in `main` and is caught within 24 hours rather
+than before a merge, which is the cost that decision already accepted.
+
+`src/core/errors.ts` reads 76.00 on six stable survivors, below the new `low`. Nothing changes for
+it mechanically — `low` is a whole-project band and Stryker enforces no per-file threshold — but it
+is now visibly below the band, and it is a test gap rather than noise: the same six mutants survive
+across two Stryker versions and two `coverageAnalysis` settings. Filed as #26.
+
+**Open: whether 92 is still the right floor on a machine that has stopped drifting.** The six runs
+of the upgraded runner that all returned 38 survivors were taken on one machine, so "the upgrade
+removed the spread" cannot yet be told apart from "this machine never exhibited it". If repeated
+`workflow_dispatch` runs on `ubuntu-latest` under 9.6.1 also come back flat, `break` could be
+tightened on that evidence. It is recorded as a question rather than acted on because 92 does not
+depend on the answer, and because tightening a gate on a spread measured elsewhere is the move this
+record exists to stop. Issue #6 carries it.
