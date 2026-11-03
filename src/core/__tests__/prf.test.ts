@@ -3,8 +3,10 @@ import fc from 'fast-check';
 import { propertyRuns } from './property-runs';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { LIBRARY_SIZE, PAGE_LENGTH, RADIX } from '../address';
+import { ROUNDS } from '../feistel';
 import {
   DOMAIN_TAG,
+  MAX_ROUND,
   asciiToBytes as encodeAscii,
   HALF_DOMAIN,
   HALF_LENGTH,
@@ -182,12 +184,23 @@ describe('the seed encoding (SPEC §4.3)', () => {
    * one way cannot have come from two different inputs. This is what the
    * `u32be(length)` prefix buys — the decoder below reads the length and knows
    * exactly where `xb` ends.
+   *
+   * The round is read as the one byte `u8(round)` writes, and that is now the
+   * whole of what the encoder accepts: `seedInput` rejects any round the byte
+   * could not carry back, so this decoder is the inverse of the encoder over
+   * its entire domain rather than over the ten rounds the network uses
+   * (ADR-0010).
    */
   const decodeSeedInput = (bytes: Uint8Array): { round: number; half: bigint } => {
     expect(toHex(bytes.subarray(0, DOMAIN_TAG_LENGTH))).toBe(
       toHex(asciiBytes(DOMAIN_TAG))
     );
+
     const round = bytes[DOMAIN_TAG_LENGTH];
+    if (round === undefined) {
+      expect.unreachable('seedInput always writes a round byte after the tag');
+    }
+
     const length = Number(
       fromBytesBE(bytes.subarray(DOMAIN_TAG_LENGTH + 1, DOMAIN_TAG_LENGTH + 5))
     );
@@ -198,9 +211,8 @@ describe('the seed encoding (SPEC §4.3)', () => {
 
     // No bytes left over: the length prefix accounts for the whole buffer.
     expect(bytes.length).toBe(DOMAIN_TAG_LENGTH + 5 + length);
-    expect(round).toBeDefined();
 
-    return { round: round ?? -1, half: fromBytesBE(halfBytes) };
+    return { round, half: fromBytesBE(halfBytes) };
   };
 
   it('lays the fields out exactly as the SPEC writes them', () => {
@@ -218,12 +230,73 @@ describe('the seed encoding (SPEC §4.3)', () => {
   });
 
   it('is injective: every encoding decodes back to the one input that made it', () => {
+    // Over the whole range the round field can carry, not over the ten rounds
+    // the network happens to use: the docstring and ADR-0010 claim the
+    // property for every round `seedInput` accepts, so that is the range the
+    // proof has to cover.
     fc.assert(
       fc.property(
-        fc.integer({ min: 0, max: 9 }),
+        fc.integer({ min: 0, max: MAX_ROUND }),
         fc.bigInt({ min: 0n, max: HALF_DOMAIN - 1n }),
         (round, half) => {
           expect(decodeSeedInput(seedInput(round, half))).toEqual({ round, half });
+        }
+      ),
+      { numRuns: propertyRuns(200) }
+    );
+  });
+
+  it('accepts both ends of the range the round field can carry', () => {
+    expect(decodeSeedInput(seedInput(0, 7n))).toEqual({ round: 0, half: 7n });
+    expect(decodeSeedInput(seedInput(MAX_ROUND, 7n))).toEqual({
+      round: MAX_ROUND,
+      half: 7n,
+    });
+  });
+
+  it('bounds the round field wide enough for every round the network runs', () => {
+    // The guard is unreachable from the generation path, and this is the
+    // assertion that keeps it so: were `ROUNDS` ever raised past the field,
+    // `encrypt` would start throwing rather than silently reusing round 0's
+    // seed, but this test says so first.
+    expect(ROUNDS - 1).toBeLessThanOrEqual(MAX_ROUND);
+  });
+
+  it('refuses a round the field cannot carry rather than truncating it', () => {
+    // The named regression cases: each of these used to be reduced into the
+    // byte of a round that is in use — 256 into round 0's, 257 into round 1's,
+    // 10.5 into round 10's and -253 into round 3's — and so returned bytes a
+    // legitimate round already owned. `-1` is the boundary below zero.
+    expect(() => seedInput(MAX_ROUND + 1, 1n)).toThrow(RangeError);
+    expect(() => seedInput(257, 1n)).toThrow(RangeError);
+    expect(() => seedInput(10.5, 1n)).toThrow(RangeError);
+    expect(() => seedInput(-253, 1n)).toThrow(RangeError);
+    expect(() => seedInput(-1, 1n)).toThrow(RangeError);
+  });
+
+  it('names the range and the round it was given', () => {
+    try {
+      seedInput(256, 1n);
+      expect.unreachable('seedInput should have refused a round outside the u8 field');
+    } catch (error) {
+      expect(error).toBeInstanceOf(RangeError);
+      expect((error as RangeError).message).toContain('[0, 255]');
+      expect((error as RangeError).message).toContain('received 256');
+    }
+  });
+
+  it('refuses every round outside the field, not merely the cases pinned above', () => {
+    fc.assert(
+      fc.property(
+        // The three shapes that escape a `u8` field: above it, below zero, and
+        // inside it but not an integer.
+        fc.oneof(
+          fc.integer({ min: MAX_ROUND + 1, max: 100_000 }),
+          fc.integer({ min: -100_000, max: -1 }),
+          fc.double({ min: 0, max: MAX_ROUND, noInteger: true, noNaN: true })
+        ),
+        (round) => {
+          expect(() => seedInput(round, 1n)).toThrow(RangeError);
         }
       ),
       { numRuns: propertyRuns(200) }

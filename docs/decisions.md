@@ -179,11 +179,31 @@ still opens.
 function, `seedInput`, separate from the SHA-256 call that consumes it.
 
 **Why.** The property that matters is that distinct `(round, half)` pairs never produce the same
-seed bytes. If two did, two different addresses would share a round-function value, and the
+seed bytes — over the domain `seedInput` accepts, which it enforces rather than assumes (below).
+If two did, two different addresses would share a round-function value, and the
 bijection would stop being one — silently, because SHA-256 would be behaving perfectly. Keeping
 the encoding separate from the hashing is what lets a test _decode_ the bytes back into
 `(round, half)` and prove injectivity, instead of asserting it in a comment. That decoder is in
 `prf.test.ts`.
+
+**The bound the round field puts on it, and why it is enforced.** Injectivity holds over the pairs
+the encoding can carry, not over every pair a caller could name: `u8(round)` has room for 256
+values, so the property is that distinct pairs of an **integer `round` in `[0, MAX_ROUND]`** and a
+half in `[0, HALF_DOMAIN)` never collide. Left unenforced that qualification was invisible and the
+claim was simply false — `seedInput(0, 1)` and `seedInput(256, 1)` returned the same bytes, as did
+`(10, 1)` and `(10.5, 1)`, and `(3, 1)` and `(-253, 1)`: a round the field cannot hold was reduced
+into the byte of a round the network does use. So `seedInput` rejects such a round instead,
+`MAX_ROUND` is exported as the bound the claim is made over, and the property test in
+`prf.test.ts` ranges across that whole interval rather than across the ten rounds in use. The
+guard is unreachable from the generation path — `ROUNDS` is 10 and `feistel.ts` is the only caller
+— and is exercised directly for the same reason as the ones in `asciiToBytes` and
+`toMinimalBytesBE`: an unenforced precondition is indistinguishable from an absent one.
+
+The bound is the field's and not `ROUNDS - 1`, which would be tighter: `feistel.ts` imports
+`prf.ts`, so the encoding cannot see the round count without an import cycle, and the limit on
+what the bytes can express belongs to the bytes. A test asserts `ROUNDS - 1 <= MAX_ROUND`, so
+raising the round count past the field becomes a red test rather than a silent reuse of round 0's
+seed.
 
 **A correction to the SPEC's own justification.** SPEC §4.3 says the prefix is mandatory because
 "without it `u8(i)` and the leading bytes of `xb` can be reordered into the same seed for
@@ -212,10 +232,17 @@ down here rather than conclude the SPEC is confused.
   and makes a future field reordering silently catastrophic.
 - _Hash the fields separately and combine._ Equivalent, slower, and further from the SPEC text,
   which is the thing the golden vectors freeze.
+- _Widen the round field so the claim needs no bound._ The honest alternative to narrowing the
+  claim, and it is closed off by ADR-0003 rather than by preference: replacing `u8(round)` with
+  `u32be(round)` changes the seed bytes of every round, the ten in use included, which replaces
+  every book in the library. Tried, to be sure rather than to assume: 21 of the 36 golden-vector
+  assertions fail under it. The format is frozen, so the claim is the thing that moves.
 
 **Consequence.** `PRF_BYTES`, `DOMAIN_TAG` and the field order are quoted from the SPEC rather
 than recomputed, and `prf.test.ts` pins the raw seed bytes as well as the round-function output,
-so a format break is localised to whichever of the two changed.
+so a format break is localised to whichever of the two changed. `MAX_ROUND` is part of the public
+surface of `core` because it is the stated domain of the injectivity claim, and a claim whose
+domain a reader cannot name is not a claim they can check.
 
 ---
 
