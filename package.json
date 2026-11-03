@@ -19,6 +19,8 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "test:watch": "vitest",
+    "bench": "vitest bench --run",
+    "bench:report": "vitest bench --run --outputJson bench-report.json && vite-node scripts/report-generation-cost.ts bench-report.json",
     "coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
     "verify": "npm run typecheck && npm run lint && npm run format:check && npm run test",

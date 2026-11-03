@@ -171,6 +171,52 @@ jobs:
           name: playwright-report
           path: playwright-report/
 
+  generation-cost:
+    # What a page, a title, a `locate` and a 32-title shelf cost on the machine
+    # that enforces this project's review gates. It reports; it never fails.
+    #
+    # ADR-0005 justified moving generation into a worker with "~1.3 ms" a page
+    # and "~42 ms" a shelf and named no machine for either, and the three
+    # machines measured since differ by close to a factor of ten -- so neither
+    # figure could be reproduced or refuted. ADR-0013 is the rule that forbids
+    # that: a performance number is calibrated on the machine that enforces it.
+    # This job is where the `ubuntu-latest` half of that comes from, and
+    # M3's review gate ("32 shelf titles drop no frame") is what needs it.
+    #
+    # Deliberately not a gate. The budget that fails a build is testing.md
+    # section 5's, asserted in `performance.test.ts` and enforced by `verify` on
+    # every push; a second threshold here would sit on the runner's own value,
+    # which is the arrangement ADR-0013 removed after it failed one run at
+    # 5.052 ms and passed the next. A green check beside a published number is
+    # worth less than the number, so the number is what this job produces.
+    #
+    # The table goes to `$GITHUB_STEP_SUMMARY`, which GitHub renders on the run
+    # page: the figures are readable without opening a log, which is the only
+    # way a reader will find them six months from now. The JSON is attached as
+    # well, for anyone who wants the distribution rather than the summary.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Measure and publish generation cost
+        run: npm run bench:report
+
+      - name: Upload benchmark report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: generation-cost
+          path: bench-report.json
+
   mutation-dry-run:
     # The cheap half of the mutation harness: does Stryker still start, find its
     # files, and get a green suite out of the instrumented run? That is exactly

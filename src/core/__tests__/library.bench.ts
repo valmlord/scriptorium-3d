@@ -1,17 +1,61 @@
 import { bench, describe } from 'vitest';
-import { LIBRARY_SIZE, PAGE_LENGTH, fromLinear } from '../address';
+import {
+  BOOKS_PER_SHELF,
+  LIBRARY_SIZE,
+  PAGE_LENGTH,
+  fromLinear,
+  type BookAddress,
+} from '../address';
 import { PAGE_ALPHABET } from '../alphabet';
 import { intToDigits } from '../bignum';
 import { getPage, getTitle, locate } from '../library';
 
 /**
- * Reported numbers for `npx vitest bench`. The threshold is *asserted* in
+ * Reported numbers for `npm run bench`. The threshold is *asserted* in
  * `performance.test.ts`, not here: a `bench` task reports a measurement but
  * cannot fail a build, and an `expect` placed in a `.bench.ts` file runs in
  * neither `vitest run` nor `vitest bench` — so it would guarantee nothing.
  *
- * Reference machine (SPEC §4.4): encrypt 1.34 ms, decrypt 0.98 ms.
+ * `npm run bench:report` runs the same tasks and renders their medians as a
+ * table, which the `generation-cost` CI job publishes to the run summary with
+ * the runner's CPU and Node version beside it. That job reports and never
+ * fails: a number nobody can reproduce is the problem it exists to fix
+ * (ADR-0013), and a second gate that can go red on runner variance is what
+ * ADR-0013 removed from the first one.
+ *
+ * The reference machine's own figures are in SPEC §4.4, which is their one
+ * home; they are not restated here.
  */
+
+/**
+ * Samples per task, fixed rather than inferred from a time budget.
+ *
+ * Vitest otherwise runs each task for a wall-clock duration, so the number of
+ * samples behind a median depends on how fast the machine is — and a median
+ * that does not say how many samples it is made of is not a number anyone can
+ * compare. `time: 0` disables the duration floor so that this count is the
+ * only thing deciding the sample size, on every machine.
+ *
+ * 50 is chosen for what a median of 50 rules out: a scheduler hiccup has to
+ * take 26 of the samples to move it, where a single reading or a median of
+ * three can be moved by one. At one to fifty milliseconds a task that costs
+ * well under a second each.
+ *
+ * What it does **not** buy is agreement between runs. Measured on a shared
+ * 4 vCPU container, the `getPage` median over 50 samples varied 9% across
+ * eight consecutive repetitions and 80% over 150 — the spread does not shrink
+ * with the sample count, because the noise is the host's own drift over
+ * seconds rather than per-call jitter, and a longer median just averages a
+ * longer stretch of it. So the run-to-run spread of a published figure is a
+ * property of the machine, not of this constant, and no sample count would
+ * make a gate built on these numbers decide by the code. That is why
+ * `bench:report`'s CI job reports and never fails, and why the report carries
+ * mean, min and p99 beside each median rather than the median alone.
+ */
+const SAMPLES = 50;
+
+/** Fixed sample count on every machine; see `SAMPLES`. */
+const options = { iterations: SAMPLES, time: 0 } as const;
 
 /** Pick a sample, cycling, and fail loudly rather than silently on empty. */
 const cycle = <T>(values: readonly T[], index: number): T => {
@@ -37,6 +81,24 @@ const books = addresses.map(({ room, wall, shelf, volume }) => ({
   volume,
 }));
 
+/**
+ * One shelf's worth of books per sample: the 32 volumes of a single shelf, the
+ * unit the renderer actually asks for when the camera arrives at one.
+ *
+ * A spread of shelves rather than one repeated, for the same reason as
+ * `addresses` above — and the whole shelf is built up front so that the
+ * measured task is the 32 `getTitle` calls and not the address arithmetic
+ * around them.
+ */
+const shelves = addresses.map(({ room, wall, shelf }) =>
+  Array.from({ length: BOOKS_PER_SHELF }, (_unused, volume): BookAddress => ({
+    room,
+    wall,
+    shelf,
+    volume,
+  }))
+);
+
 const edgePages = [
   intToDigits(0n, PAGE_ALPHABET, PAGE_LENGTH),
   intToDigits(LIBRARY_SIZE - 1n, PAGE_ALPHABET, PAGE_LENGTH),
@@ -50,7 +112,7 @@ describe('the bijection', () => {
     () => {
       getPage(cycle(addresses, forward++));
     },
-    { time: 500 }
+    options
   );
 
   let title = 0;
@@ -62,7 +124,7 @@ describe('the bijection', () => {
     () => {
       getTitle(cycle(books, title++));
     },
-    { time: 500 }
+    options
   );
 
   let backward = 0;
@@ -72,7 +134,7 @@ describe('the bijection', () => {
     () => {
       locate(cycle(pages, backward++));
     },
-    { time: 500 }
+    options
   );
 
   let edge = 0;
@@ -82,6 +144,30 @@ describe('the bijection', () => {
     () => {
       locate(cycle(edgePages, edge++));
     },
-    { time: 500 }
+    options
+  );
+});
+
+describe('a shelf', () => {
+  let shelf = 0;
+
+  /**
+   * The number M3's review gate is about: a shelf is 32 spines, their titles
+   * are resolved together when the camera gets close enough to read them
+   * (architecture §3), and the gate asks whether doing so drops a frame.
+   *
+   * Measured as one task rather than multiplied up from `getTitle`, because
+   * 32 consecutive calls are not 32 independent ones: they share a warm JIT
+   * and a warm allocator, and the Feistel network's `bigint` intermediates are
+   * the same size every time.
+   */
+  bench(
+    'getTitle × 32 — one shelf of titles',
+    () => {
+      for (const book of cycle(shelves, shelf++)) {
+        getTitle(book);
+      }
+    },
+    options
   );
 });
