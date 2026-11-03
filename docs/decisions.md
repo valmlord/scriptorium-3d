@@ -82,9 +82,46 @@ timeline rather than a second animation that has to be kept in sync with the fir
 
 **Decision.** All `core` calls go through a worker client with an LRU cache and cancellation.
 
-**Why.** One page costs ~1.3 ms, which is invisible. A shelf of 32 titles costs ~42 ms, which is three
-dropped frames, and the camera is usually flying while those titles are being resolved. Cancellation
-matters as much as the thread: fly past a shelf and its titles are no longer wanted.
+**Why.** One page is invisible; a shelf of them is not. Measured by the `generation-cost` job on
+`ubuntu-latest`, the machine that enforces this project's gates, as medians of 50 warmed samples
+over three runs on Node 22, image `ubuntu24` — CI 41639200450, and 41640084878 attempts 1 and 2,
+whose benchmark code is identical:
+
+| Operation            | AMD EPYC 7763 (2 runs)              | Intel Xeon 6975P-C (1 run) |
+| -------------------- | ----------------------------------- | -------------------------- |
+| `getPage`            | 1.35 ms                             | 1.01 ms                    |
+| `getTitle`           | 0.97–0.98 ms                        | 0.73 ms                    |
+| `locate`             | 1.41–1.42 ms                        | 1.05 ms                    |
+| A shelf of 32 titles | **32.5–32.9 ms — 1.95–1.97 frames** | **25.1 ms — 1.51 frames**  |
+
+Two columns because `ubuntu-latest` is a label and not a machine: those runs landed on two CPU
+models, and the Intel one is 34% faster on a page. They are reported separately rather than averaged,
+because the average of two machines is a machine that does not exist. Within one model the figures
+are reproducible — the two AMD runs agree to 0.1% on a page and 1.1% on a shelf — so the gap between
+the columns is the hardware, not the apparatus.
+
+**A shelf is one and a half to two frames, and the camera is usually flying while those titles are
+being resolved** — so they are frames the user sees go missing. That is the argument for the thread,
+and it is not close on either machine. A cold page is worse again: the first `getPage` of a fresh
+process measured 6.97 ms on the Intel runner and 12.09 ms on an AMD one — up to three quarters of a
+frame for one page — which is what the worker's warm-up on startup is for.
+
+And it cannot be optimised away. `getTitle` renders 25 digits where `getPage` renders 3200 and still
+costs 72–73% of it on every run, so what is left when nearly all the rendering is gone is the
+Feistel network — whose ten rounds are what keep neighbouring addresses from producing correlated
+text (ADR-0002), over a page format that is frozen (ADR-0003). There is no cheaper page to generate.
+
+Cancellation matters as much as the thread: fly past a shelf and its titles are no longer wanted.
+
+**Why these figures name their machines.** Because ADR-0013 requires it, and this record predates
+ADR-0013 by eight decisions. It read "one page costs ~1.3 ms" and "a shelf of 32 titles costs
+~42 ms, which is three dropped frames", with no machine attached to either — and a performance
+figure that names no machine can be neither reproduced nor refuted, which is worse than no figure,
+because it reads as evidence. Both were also stale by the time anyone looked: the machines since
+measured span close to a factor of ten, and `424c37c` made `getTitle` divide the page value down and
+render 25 digits instead of rendering 3200 and discarding 3175, so a shelf stopped being 32 page
+costs. The decision above never rested on which of those numbers was right, which is why correcting
+them changes nothing else in this record. Issue #17 has the measurement.
 
 **Consequence.** The core stays synchronous and pure; asynchrony exists only at the worker boundary.
 

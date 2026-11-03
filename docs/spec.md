@@ -217,8 +217,11 @@ Going back is `.reverse()` of that same timeline, never a second hand-written an
 plain `CameraRig` object of numeric fields; the rig is applied to the three.js camera once per frame. GSAP
 never touches three.js objects directly.
 
-**Generation off the main thread.** 1.3 ms per page is fine once and ruinous 32 times in a frame while
-generating shelf titles. All generation goes through the worker client, which caches and can cancel.
+**Generation off the main thread.** A page costs single-digit milliseconds, which is fine once and
+ruinous 32 times in a frame while generating shelf titles. All generation goes through the worker
+client, which caches and can cancel. The measured costs and the machines they were taken on are in
+ADR-0005; they are not restated here, because a performance figure that names no machine is not
+evidence (ADR-0013).
 
 ---
 
