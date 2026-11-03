@@ -131,6 +131,29 @@ render 25 digits instead of rendering 3200 and discarding 3175, so a shelf stopp
 costs. The decision above never rested on which of those numbers was right, which is why correcting
 them changes nothing else in this record. Issue #17 has the measurement.
 
+**A fourth machine, slower than all three, measured since.** The table above is three machines and
+does not claim to be every machine, but anything that cites it for "the slowest machine measured" is
+now out of date — `src/worker/loop.ts`'s comment on the 4 ms slice does exactly that. The
+`feat/worker-page-generation` container is an **Intel(R) Xeon(R) Processor @ 2.10GHz, 4 logical cores,
+15.7 GiB, Node v22.23.4 on linux/x64**: medians of 50 warmed samples from the same
+`npm run bench:report` apparatus give `getPage` **2.282 ms**, `getTitle` **1.327 ms**, `locate`
+**2.625 ms** and **a shelf of 32 titles 44.990 ms — 2.70 frames**, with a p99 of 64.077 ms on the
+shelf. Cold: the first `getPage` of the process 12.427 ms, median of the first 15 3.808 ms — again
+about eight times the warm figure, as on all three above.
+
+So the span across the four is a factor of about four on a page and close to three on a title, and the
+argument this record rests on only gets stronger: a shelf that does not fit in a frame on either
+runner does not fit in two and a half on this one. What moves is any arithmetic built on the span.
+ADR-0024's 4 ms slice is three to eight titles on the three machines above and three on this one, and
+that is stated there rather than here.
+
+The same pull request's `generation-cost` job on `ubuntu-latest`
+([run 41684435446](https://github.com/valmlord/scriptorium-3d/actions/runs/41684435446/job/126086319884),
+**AMD EPYC 7763, 4 logical cores, Node v22.23.4, image ubuntu24**) reported `getPage` 1.377 ms,
+`getTitle` 1.004 ms and a shelf of 34.194 ms, with a cold first `getPage` of 11.934 ms. That is 0.8 ms
+above this record's AMD upper bound on a shelf, inside the 2.6% spread it reports across four runs on
+the same model, so the AMD column stands as measured.
+
 **Consequence.** The core stays synchronous and pure; asynchrony exists only at the worker boundary.
 
 ---
@@ -1205,3 +1228,112 @@ to Stryker is whether the hybrid case deserves its own option. Recorded rather t
 the workaround costs nothing a reader is not already told to do, and because patching the planner
 locally would make this project's score incomparable with its own history. Issues #6 and #25 carry
 the six named mutants.
+
+---
+
+## ADR-0024 — The worker yields between requests, and a drain begins with a yield and never ends with one
+
+**Decision.** The worker's message loop takes delivery of messages and computing them separately.
+`accept` answers a payload claiming to be a `cancel` **on arrival** and queues everything else, which
+is O(1). The drain **hands the event loop back before computing anything**, then answers the queue in
+order, yielding again once `REQUEST_SLICE_MS` — **4 ms** — of compute has gone by, and **never
+yielding into an empty queue**. The yield is a `MessageChannel` round trip.
+
+**Why.** The naive loop is `onmessage = (event) => post(handle(event.data))`. It passes every test the
+handler has and the feature it implements does nothing. Fan a shelf out and 32 request messages are
+queued as 32 tasks; the worker runs them back to back, about a millisecond apiece; the `cancel` the
+client posts 5 ms later is queued **behind** the 27 requests it was trying to prevent and is read
+about 27 ms after the last title it could have saved. Every title is computed. The handler then
+answers each cancel `reply-in-flight`, truthfully, and the client correctly discards 27 results it
+paid for in full. Nothing is red, and cancellation is decorative — which is this repository's
+recurring defect in a new place: a mechanism that is configured, tested and reaches nothing.
+
+The leading yield is what makes the queue worth having, and leaving it out is the subtle way to
+rebuild the naive loop out of the right parts. Without it the first `accept` drains the single
+message it just queued, synchronously, inside its own task — so the queue holds at most one request,
+the other 31 are still in the event loop's queue, and the cancel is the 33rd task behind them exactly
+as before. **A queue only overtakes work that is actually in it.**
+
+Which is also why what `protocol.ts` calls a channel that overtakes the queue is one queue and one
+`postMessage` rather than a second `MessagePort`. Both ports' deliveries land in the same task queue
+in arrival order, so a cancel posted after 32 requests is the 33rd task either way. What makes it
+overtake is that by then the work is no longer in the queue it has to overtake.
+
+**Why the yield is a macrotask, and specifically a message.** `queueMicrotask` and a bare `await`
+drain the microtask queue and return to the same task, so no `message` event is delivered in between
+and a loop yielding that way would read no cancellation at all. Only returning to the event loop lets
+a message in. Among macrotasks it is a `MessageChannel` round trip and not `setTimeout(0)`, because a
+browser clamps nested timers to 4 ms after five levels of nesting and the drain's timers **are**
+nested — each is scheduled from inside the previous one's callback. That would add a 4 ms sleep to
+every 4 ms slice and halve the rate at which a shelf is generated, for no benefit. A message has no
+such clamp.
+
+**Why 4 ms.** It is the one figure in the loop that does not vary with the machine, which is why it is
+the one that is fixed, and both directions have a cost. A slice of 1 ms would check for cancellation
+between every title and spend a few percent of the thread doing it; a slice of 32 ms would be the
+naive loop with extra steps, reading a cancel only once a shelf had finished. A title costs 0.46 ms
+on the fastest machine on record and 0.98 ms on the slowest of ADR-0005's three, so a 4 ms slice is
+three to eight titles there — and 1.33 ms on the fourth machine now recorded in ADR-0005, where it is
+three. The cost of a yield is a task-queue turn, microseconds, so a slice three to eight requests long
+spends well under 1% of the thread on yielding. It is a clock and not a counter because the budget is
+4 ms of **compute**, and how many requests fit in 4 ms is exactly what varies by a factor of three
+across the machines in that record.
+
+**The measurement.** 32 title requests to the worker through a real `node:worker_threads` thread, with
+the cancels for the second half posted when the first answer comes back — the timing a camera has,
+about 28 ms of work still queued. A `dropped` response can only be produced for a request refused
+_before_ `core` was called, so the disposition is what discriminates rather than the count of
+rejections. On the container named in the pull request, an **Intel(R) Xeon(R) Processor @ 2.10GHz, 4
+logical cores, 15.7 GiB, Node v22.23.4 on linux/x64** (ADR-0013):
+
+| drain                 | titles computed | dropped | dispositions           |
+| --------------------- | --------------: | ------: | ---------------------- |
+| as written            |          **16** |  **16** | 16 × `pre-emptive`     |
+| slice yield removed   |              32 |       0 | 16 × `reply-in-flight` |
+| leading yield removed |              32 |       0 | 16 × `reply-in-flight` |
+| both removed          |              32 |       0 | 16 × `reply-in-flight` |
+
+So abandoning a shelf half way through abandons half the work, and without a yield it abandons none of
+it **while reporting the cancellation truthfully** — the decorative-feature failure, reproduced rather
+than argued.
+
+**Why the drain never yields into an empty queue, which was found by measuring rather than by
+reasoning.** With only the _leading_ yield removed the loop first measured as unchanged: 16 and 16.
+The cause was the drain's trailing yield into an already empty queue, which let the queue fill one
+request late and papered over the missing leading yield. Pinned by a fourth variant — no leading yield
+**and** no yield into an empty queue → **32 computed, 0 dropped** — while keeping the leading yield and
+dropping the trailing one stays at 16 and 16. The drain was changed to never yield into an empty queue,
+which is one macrotask cheaper and makes the leading yield load-bearing and detectable; the table above
+is after that change. A guard that is red in only one of the two places it should be is a guard partly
+reporting a safety it does not have.
+
+**Alternatives rejected.**
+
+- _A second `MessagePort` for cancels._ Overtakes nothing: both ports deliver into the same task queue
+  in arrival order. Covered above, and it is the alternative `protocol.ts`'s wording invites.
+- _`queueMicrotask`, or a bare `await`, as the yield._ Never leaves the task, so no message is
+  delivered and the naive loop's behaviour is unchanged.
+- _`setTimeout(0)`._ Clamped to 4 ms once nested, which doubles a slice.
+- _Counting requests instead of milliseconds for the slice._ A budget that varies by a factor of three
+  across the machines in ADR-0005, which is the thing ADR-0013 forbids.
+- _A module-level `MessageChannel` singleton instead of one per yield._ One allocation instead of about
+  eight per shelf, against 25 to 33 ms of `bigint` arithmetic — not measurable — and an open port with
+  a listener keeps its host's event loop referenced, which is a test process that never exits.
+
+**Consequence.** One extra task-queue turn before a burst is answered — microseconds against the 1.0 to
+1.35 ms of the first page in it (ADR-0005) — and one more per slice. In exchange a shelf abandoned
+after 5 ms stops after about 5 ms of compute instead of running all 32 titles to completion, which is
+what makes ADR-0016's rejection worth issuing. `WorkerLoop.whenIdle` is the worker-side half of the
+`waitForIdle()` that testing.md §7 specifies so that no end-to-end test ever sleeps on a duration; the
+main-thread half is ADR-0025's.
+
+**Open: none of this closes M3's frame gate, and it cannot be closed here.** The gate reads "generating
+32 shelf titles drops no frame", and "drops no frame" is a statement about a render loop: `engine/` is a
+stub, there is no `setAnimationLoop`, no `window.__scriptorium` hook and no scripted camera flight. What
+was measured instead is a 60 fps timer on an otherwise idle main thread while 25 shelves are generated —
+a 16.17 ms median, an 18.13 to 20.20 ms maximum, no frame over 32 ms in 365 frames across four runs, and
+0.0 to 1.1% over 20 ms, against 96.2% of frames over 32 ms for the same work inline. The main thread's
+own share of a shelf is 0.75 to 0.95 ms, which is the figure that could have sunk this: architecture §2
+puts anything above ~1 ms on the worker, and the fan-out plus 32 response handlers sits just under it.
+The assertion that closes the gate is the one testing.md §5 already specifies, through the debug hook,
+and it belongs to M4/M5. No threshold is added anywhere from the figures above, for ADR-0013's reason.
