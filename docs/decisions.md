@@ -1564,7 +1564,11 @@ branch so that both commands could be timed on real runners. **Eighteen runs**: 
 `npm run test` and six of `npm run coverage`, over three CPU models, Node v22.23.4, images
 ubuntu24/20261026.354.1 and ubuntu24/20261101.360.1. Runs
 [41688546201](https://github.com/valmlord/scriptorium-3d/actions/runs/41688546201) and
-[41689066798](https://github.com/valmlord/scriptorium-3d/actions/runs/41689066798).
+[41689066798](https://github.com/valmlord/scriptorium-3d/actions/runs/41689066798), on the scratch
+branch `chore/infra-test-duration-probe`. **Both runs are red overall and the figures are still
+sound**: the reporter is a loose `.mjs` at the repository root, so `format` and `verify` failed on it
+while the duration jobs — which are what the numbers come from, and which run the suite unmodified —
+passed. The branch is not merged and can be deleted once these figures are read.
 
 | mode               | machine            | runs | slowest test in the suite | slowest test this ceiling governs |      heaviest hook |
 | ------------------ | ------------------ | ---: | ------------------------: | --------------------------------: | -----------------: |
@@ -1684,7 +1688,7 @@ from a test is what surfaced that.
 
 **Open: nothing in CI reports a test duration, so the next time the suite grows into a ceiling nobody
 will see it either.** The figures above came from a reporter on a scratch branch and are not reproducible
-from `main`; six months from now the only way to know whether 25 s is still 5.79x or 1.5x is to take the
+from `main` once it is gone; six months from now the only way to know whether 25 s is still 5.79x or 1.5x is to take the
 measurement by hand again, which is exactly how the 5 s default survived as long as it did. The guard
 test catches a ceiling that stops being applied, not one that stops being generous. The cheap answer is
 the one `generation-cost` already uses for the benchmark table (ADR-0013): publish the slowest tests to
