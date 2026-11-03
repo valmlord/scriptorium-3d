@@ -122,6 +122,30 @@ The budget is not asserted under `npm run coverage` or `npm run test:mutation`: 
 the instrumentation (ADR-0012). CI's `verify` job runs uninstrumented, so the threshold is enforced on
 every push and every pull request.
 
+**What a page, a title and a shelf of 32 titles actually cost is reported, not asserted.**
+`npm run bench:report` runs the `.bench.ts` tasks, takes a median of a fixed sample count for each —
+fixed in the bench file, so it does not vary with how fast the machine is — and renders them as a
+table with the runner's CPU model, core count and Node version beside them. The `generation-cost` job
+publishes that table to the run summary, where GitHub shows it on the run's own page: a figure nobody
+can find without opening a log is a figure nobody will find, and one that names no machine is not
+evidence at all (ADR-0013). **No figure that job reports can fail the build, however slow; a
+measurement it cannot take does fail it.** Both halves are deliberate. The run-to-run spread of those
+medians is the runner's own drift between runs and does not shrink as the sample count grows, so a
+threshold built on them would decide by luck rather than by the code — which is the whole of what
+ADR-0013 took out of the budget above. The budget above is the only gate.
+
+The figures the worker decision rests on, each with the machine it was taken on, are recorded in
+ADR-0005.
+
+**The `~5.05 ms` above does not reproduce on today's runners, and the budget has not been moved for
+it.** The `generation-cost` job measures `getPage` on `ubuntu-latest` at 1.01 to 1.35 ms warm, and
+1.83 to 2.99 ms on this section's own apparatus — an unwarmed median — over three runs that landed
+on two different CPU models, because `ubuntu-latest` is a label and not a machine. So 25 ms is now
+about eight times the slowest of those observations rather than five. Whether that means the budget
+should come down is a question about what the budget is for and not about the measurement, and it is
+open: see issue #17. Nothing here changes it, and ADR-0013's reasoning is untouched — a figure that
+has stopped reproducing is still the figure that decision was taken on.
+
 Frame budget is asserted in Playwright instead: during a scripted camera flight, no frame exceeds 32 ms and
 no more than 1% of frames exceed 20 ms, measured through the debug hook.
 

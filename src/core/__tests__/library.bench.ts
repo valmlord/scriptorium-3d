@@ -1,16 +1,31 @@
 import { bench, describe } from 'vitest';
-import { LIBRARY_SIZE, PAGE_LENGTH, fromLinear } from '../address';
+import {
+  BOOKS_PER_SHELF,
+  LIBRARY_SIZE,
+  PAGE_LENGTH,
+  fromLinear,
+  type BookAddress,
+} from '../address';
 import { PAGE_ALPHABET } from '../alphabet';
 import { intToDigits } from '../bignum';
 import { getPage, getTitle, locate } from '../library';
+import { benchOptions } from './bench-samples';
 
 /**
- * Reported numbers for `npx vitest bench`. The threshold is *asserted* in
+ * Reported numbers for `npm run bench`. The threshold is *asserted* in
  * `performance.test.ts`, not here: a `bench` task reports a measurement but
  * cannot fail a build, and an `expect` placed in a `.bench.ts` file runs in
  * neither `vitest run` nor `vitest bench` — so it would guarantee nothing.
  *
- * Reference machine (SPEC §4.4): encrypt 1.34 ms, decrypt 0.98 ms.
+ * `npm run bench:report` runs the same tasks and renders their medians as a
+ * table, which the `generation-cost` CI job publishes to the run summary with
+ * the runner's CPU and Node version beside it. No figure it reports can turn
+ * that job red, however slow — a second gate going red on runner variance is
+ * what ADR-0013 removed from the first one — but a measurement that cannot be
+ * taken does fail it, because a number nobody took is not a number.
+ *
+ * The reference machine's own figures are in SPEC §4.4, which is their one
+ * home; they are not restated here.
  */
 
 /** Pick a sample, cycling, and fail loudly rather than silently on empty. */
@@ -37,6 +52,24 @@ const books = addresses.map(({ room, wall, shelf, volume }) => ({
   volume,
 }));
 
+/**
+ * One shelf's worth of books per sample: the 32 volumes of a single shelf, the
+ * unit the renderer actually asks for when the camera arrives at one.
+ *
+ * A spread of shelves rather than one repeated, for the same reason as
+ * `addresses` above — and the whole shelf is built up front so that the
+ * measured task is the 32 `getTitle` calls and not the address arithmetic
+ * around them.
+ */
+const shelves = addresses.map(({ room, wall, shelf }) =>
+  Array.from({ length: BOOKS_PER_SHELF }, (_unused, volume): BookAddress => ({
+    room,
+    wall,
+    shelf,
+    volume,
+  }))
+);
+
 const edgePages = [
   intToDigits(0n, PAGE_ALPHABET, PAGE_LENGTH),
   intToDigits(LIBRARY_SIZE - 1n, PAGE_ALPHABET, PAGE_LENGTH),
@@ -50,7 +83,7 @@ describe('the bijection', () => {
     () => {
       getPage(cycle(addresses, forward++));
     },
-    { time: 500 }
+    benchOptions
   );
 
   let title = 0;
@@ -62,7 +95,7 @@ describe('the bijection', () => {
     () => {
       getTitle(cycle(books, title++));
     },
-    { time: 500 }
+    benchOptions
   );
 
   let backward = 0;
@@ -72,7 +105,7 @@ describe('the bijection', () => {
     () => {
       locate(cycle(pages, backward++));
     },
-    { time: 500 }
+    benchOptions
   );
 
   let edge = 0;
@@ -82,6 +115,30 @@ describe('the bijection', () => {
     () => {
       locate(cycle(edgePages, edge++));
     },
-    { time: 500 }
+    benchOptions
+  );
+});
+
+describe('a shelf', () => {
+  let shelf = 0;
+
+  /**
+   * The number M3's review gate is about: a shelf is 32 spines, their titles
+   * are resolved together when the camera gets close enough to read them
+   * (architecture §3), and the gate asks whether doing so drops a frame.
+   *
+   * Measured as one task rather than multiplied up from `getTitle`, because
+   * 32 consecutive calls are not 32 independent ones: they share a warm JIT
+   * and a warm allocator, and the Feistel network's `bigint` intermediates are
+   * the same size every time.
+   */
+  bench(
+    'getTitle × 32 — one shelf of titles',
+    () => {
+      for (const book of cycle(shelves, shelf++)) {
+        getTitle(book);
+      }
+    },
+    benchOptions
   );
 });

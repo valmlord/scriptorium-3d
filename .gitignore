@@ -34,3 +34,8 @@ Thumbs.db
 # Mutation testing (Stryker)
 reports/
 .stryker-tmp/
+
+# Benchmark report (npm run bench:report). A measurement belongs to the machine
+# that took it, so it is published in the CI run summary and recorded in an ADR
+# with that machine named -- never committed as a file that outlives its runner.
+bench-report.json
