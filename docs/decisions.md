@@ -1056,3 +1056,38 @@ actually needs — not a type to catch, but the list of what can go wrong.
 a base, and the doc-comment table is load-bearing documentation: it is the only complete statement of
 the codec's failure surface, so a new refusal is added there in the same change or the surface is
 silently understated.
+
+---
+
+## ADR-0022 — `+` in a fragment parameter is a literal plus
+
+**Decision.** The codec reads `+` in a `q` or `lang` value as the character `+`, not as a space, and
+parameters are parsed and written by hand rather than through `URLSearchParams`, in the fixed order
+SPEC §7 writes them: `q` then `lang`.
+
+**Why.** Reading `+` as a space is form encoding — `application/x-www-form-urlencoded` — and this is
+a URL fragment, not a submitted form. Nothing on this path ever produces that encoding:
+`encodeURIComponent` writes a space as `%20`. So the only way a `+` reaches the parser is that
+somebody typed or pasted one, and a reader of this library searching for a literal plus is far more
+likely than one who meant a space and wrote a plus.
+
+`URLSearchParams` was rejected for the same reason first — it applies form decoding, so it would turn
+that typed `+` into a space — and then for a second one that matters as much: it gives no control
+over parameter order, and a **fixed** order is what makes a canonical fragment a single string
+rather than one of a set of equivalent ones. ADR-0020 computes `canonicalFragment` by re-serialising;
+that is only a canonical form if serialising twice from the same address yields the same bytes.
+
+**Alternatives rejected.**
+
+- _`URLSearchParams`._ Form-decodes `+`, and leaves parameter order to the implementation. Both
+  break something this scheme needs.
+- _Accept `+` as a space but keep writing `%20`._ Asymmetric: the parse of a serialised fragment
+  would no longer be the identity on queries containing a plus, so the round-trip property SPEC §7
+  rests on would hold only for queries that avoid one character.
+- _Refuse `+` outright as ambiguous._ Refuses a character that is in neither alphabet's way and that
+  a search query may legitimately contain.
+
+**Consequence.** `q` is percent-decoded with `decodeURIComponent` and nothing else, so an invalid
+sequence is a refusal (`UndecodableParameterError`) rather than a replacement character, and the
+round trip over queries built from Cyrillic text and from the scheme's own delimiters is a property
+test rather than a set of examples.
