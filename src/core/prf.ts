@@ -192,17 +192,43 @@ function concatBytes(parts: readonly Uint8Array[]): Uint8Array {
 }
 
 /**
+ * The largest round index the `u8(round)` field of SPEC §4.3 can carry.
+ *
+ * Exported because it is the exact bound of the injectivity `seedInput`
+ * promises: a test that proves the property has to range over precisely this
+ * interval, since one value further the claim is false and one value short the
+ * proof is narrower than the claim.
+ *
+ * Deliberately not `ROUNDS - 1`. `feistel.ts` imports this module, so the
+ * encoding cannot see the round count without a cycle — and the limit belongs
+ * to the field rather than to the network that currently fills ten of its 256
+ * values. A test asserts that the network's rounds all fit inside it.
+ */
+export const MAX_ROUND = 0xff;
+
+/**
  * The bytes that are hashed to make a round seed (SPEC §4.3):
  *
  *     DOMAIN_TAG ‖ u8(round) ‖ u32be(xb.length) ‖ xb
  *
  * Separate from `roundSeed` because this is the part that has to be
- * *injective*: distinct `(round, half)` pairs must never produce the same byte
- * string. If they did, two different addresses would share a round-function
- * value, and — SHA-256 being blameless here — two different books would hold
- * the same text. Keeping the encoding its own function is what lets a test
- * decode these bytes back into `(round, half)` and prove the property, rather
- * than assert it in a comment.
+ * *injective*: for an integer `round` in `[0, MAX_ROUND]` and a `half` in
+ * `[0, HALF_DOMAIN)`, distinct `(round, half)` pairs never produce the same
+ * byte string. If two did, two different addresses would share a
+ * round-function value, and — SHA-256 being blameless here — two different
+ * books would hold the same text. Keeping the encoding its own function is
+ * what lets a test decode these bytes back into `(round, half)` and prove the
+ * property, rather than assert it in a comment.
+ *
+ * That domain is enforced rather than assumed, which is what makes the
+ * sentence above true as written rather than true only of the ten rounds in
+ * use. `u8(round)` has room for 256 values, so a round of 256 reduced into the
+ * field would be the byte of round 0, and `10.5` and `-253` the bytes of 10
+ * and 3 — three ways for the encoding to hand out a seed that belongs to a
+ * different round (ADR-0010). Like the guards in `asciiToBytes` and
+ * `toMinimalBytesBE`, this one is unreachable from the public path and is
+ * tested directly, because an unenforced precondition is indistinguishable
+ * from an absent one.
  *
  * The `u32be(xb.length)` prefix is what makes the encoding self-delimiting:
  * it commits to how many bytes of `xb` follow, so the reader of these bytes
@@ -211,10 +237,16 @@ function concatBytes(parts: readonly Uint8Array[]): Uint8Array {
  * limit of the SPEC's own one-line justification for the prefix.
  */
 export function seedInput(round: number, half: bigint): Uint8Array {
+  if (!Number.isInteger(round) || round < 0 || round > MAX_ROUND) {
+    throw new RangeError(
+      `Expected an integer round index in [0, ${String(MAX_ROUND)}], received ${String(round)}`
+    );
+  }
+
   const halfBytes = toMinimalBytesBE(half);
   return concatBytes([
     DOMAIN_TAG_BYTES,
-    new Uint8Array([round & 0xff]),
+    new Uint8Array([round]),
     u32be(halfBytes.length),
     halfBytes,
   ]);
