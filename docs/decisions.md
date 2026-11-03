@@ -397,13 +397,17 @@ taken through an instrumented build measures the instrumentation.
 
 **Decision.** The full Stryker run is **nightly on `main` and on `workflow_dispatch`**, not on pushes
 or pull requests. What the pull request path gets instead is `npm run test:mutation:dry`
-(`scripts/check-mutation-harness.sh`): Stryker's dry run, about fifteen seconds, asserting both its
+(`scripts/check-mutation-harness.sh`): Stryker's dry run, a 34-second job that adds nothing to the
+critical path, asserting both its
 exit code and that it ran every test the config collects. The score is read as a **floor**, not a
 measurement, and the survivor list is not a to-do list. The `changes` job in `ci.yml` is deleted,
 having had no other consumer.
 
-**Why.** The run costs 21 to 59 minutes, measured over four CI runs, and its verdict is not
-reproducible. Between runs 41392938348 and 41394049476 — whose `src/` trees are identical, the
+**Why.** The run costs 21 to 70 minutes, measured over six CI runs. It was also believed to be
+irreproducible, on the evidence below; that belief was wrong and the correction at the end of this
+record explains what the evidence actually showed. The decision stands on the cost alone.
+
+Between runs 41392938348 and 41394049476 — whose `src/` trees are identical, the
 second commit touching only `vitest.stryker.config.ts` and two documents — **56 of 587 distinct
 mutant positions changed verdict**: 31 `Killed → Survived`, 18 `Killed → Timeout`, 5
 `Timeout → Killed`, 2 `Survived → Killed`. A timeout counts as killed, so only the survival moves
@@ -451,5 +455,34 @@ notifies the repository owner through GitHub's own default, so no extra machiner
 `schedule` fires only on the default branch, so a feature branch cannot get a score from it at all —
 hence `workflow_dispatch`, which is how a branch asks for a number before it merges.
 
-Issue #6 stays open. This decision changes where the run happens and how its output is read; it does
-not fix the attribution instability that makes the output what it is.
+**Correction, 2026-11-03: the swing was caused, not random.** The sentence above calling the verdict
+irreproducible does not survive its own evidence, and the mistake is instructive enough to record
+rather than quietly edit away. The two runs compared were called identical because `src/` was
+identical — but the commit between them, `d2aa600`, raised `testTimeout` from Vitest's unexamined 5 s
+default to 30 s in `vitest.stryker.config.ts`, and that file governs how the suite runs under
+Stryker. A configuration file is code for this purpose. Dismissing it as "only config" is the same
+error this record was written to catch, committed in the act of writing it.
+
+The mechanism is direct. A test that times out is a failing test, and a failing test kills its
+mutant. Under a 5 s cap, mutants that merely made the code slower — a broken early exit, a wider
+loop — died on the clock rather than on an assertion, and the score counted them as killed. Raising
+the cap let those tests finish and pass, so the same mutants are now correctly reported as
+survivors. That is the whole of the 31 `Killed → Survived`, and it means the earlier 98-99 scores
+were inflated and the present ~93 is the more honest number. The same cap explains the per-mutant
+flapping noted in `testing.md` — five runs of one mutant giving three verdicts is what a borderline
+test sitting near a 5 s line does.
+
+Six scores are now known: 99.16, 99.16 and 98.32 before `d2aa600`; 93.43, 93.10 and 93.27 after it.
+The decisive pair is the last two: **two runs of the identical commit `e43d09b`, launched
+concurrently, scoring 93.10 and 93.27 — a spread of 0.17 points.** Across all four post-change runs
+the spread is 0.33. So the verdict is very nearly a function of the code, and the residual noise is
+two tenths of a point rather than five.
+
+What this changes in the record above: the score is a **measurement with about ±0.2 of noise**, not
+a floor five points below the truth, and the one-sided-error argument is no longer needed to make it
+usable. `break: 75` was sized for a swing that does not exist and is now far looser than the
+evidence requires. What it does not change: the run costs an hour, which is the reason it is not a
+pull request gate, and that reason was always sufficient on its own.
+
+Issue #6 stays open, with its premise corrected: what remains to establish is the residual 0.2
+points and where `break` should sit now that it is defending against that rather than against six.
