@@ -541,9 +541,11 @@ the convenience copy, and only for tools the lockfile already installs.
 
 **Why.** §8 named ESLint, Prettier and `tsc` as required CI stages. Prettier was enforced only by
 `lint-staged` in the pre-commit hook, and shell by nothing, which let four documents stay
-unformatted from `dd0c833` through three merged pull requests. A hook sees the files one local
-commit stages; it is bypassed by `--no-verify`, by a web edit, and by any file that was not staged
-at the time. A hook task that spawns a binary npm does not provide blocks commits on a machine that
+unformatted from `dd0c833` through three merged pull requests. The four were `CONTRIBUTING.md`,
+`docs/code-style.md`, `docs/spec.md` and `README.md` — three of them the engineering standards
+themselves — and on `e43d09b` `prettier --check .` named all four and exited 1, while each was byte
+identical to the commit that published it. A hook sees the files one local commit stages; it is
+bypassed by `--no-verify`, by a web edit, and by any file that was not staged at the time. A hook task that spawns a binary npm does not provide blocks commits on a machine that
 lacks it — observed, with `Task failed to spawn: shellcheck ENOENT` — which is why shell is linted
 in CI only.
 
@@ -560,7 +562,34 @@ out wrong.
 
 The file list for `lint:shell` comes from `git ls-files '*.sh' '.husky/*'` rather than being
 enumerated in the workflow, so a new script is covered on the day it lands instead of when someone
-remembers to extend a list.
+remembers to extend a list. `yml` and `yaml` join the hook's Prettier glob at the same time, so the
+local copy agrees with `prettier --check .`, which already covered the workflow files.
+
+**What the two gates cost.** Both were watched red and green, and both are off the critical path.
+On run [41577184462](https://github.com/valmlord/scriptorium-3d/actions/runs/41577184462), the
+`pull_request` event on `d7166da`, `format` took 33s and `shell-lint` 6s against a critical path of
+109 seconds held by `coverage` at 114s and `e2e` at 101s; the `push` run
+[41577176764](https://github.com/valmlord/scriptorium-3d/actions/runs/41577176764) over the same tree
+reported 30s and 4s, which also confirms the new jobs behave identically on both events — the
+discrepancy that hid the `ae0af83` failure for two runs. `shell-lint` logged ShellCheck `0.9.0` on
+runner image `ubuntu24/20261025.353`, the same version the local red/green transcripts were produced
+with, so the proof and the job are not testing different linters.
+
+**Alternatives rejected.**
+
+- _The ShellCheck npm wrapper as a `devDependency`, so the hook could lint shell too._ It downloads a
+  binary in a postinstall script, and code-style §7 makes a new dependency a decision to record
+  rather than one to slip into a CI change. The hook keeping out of shell is the cheaper half of the
+  same answer.
+- _`--enable=all`._ Covered above: one extra finding class on this repository, and it is taste.
+- _Steps inside `verify` instead of two jobs._ Covered above: a red check's name is the first
+  diagnostic anyone reads, and a step cannot report while `verify` is failing for another reason.
+- _A `"//"` key in `.lintstagedrc.json` carrying the note about why shell is CI-only._ That file is
+  strict JSON, so the key reads as a glob with a command attached and the tool ignores it silently —
+  which is the `_comment_timeout` shape this record exists to remove, committed in the act of
+  documenting its removal. The note lives in the `shell-lint` job comment instead.
+  `.lintstagedrc.yaml` is also a search place `lint-staged` honours and does take comments, so moving
+  it there is a one-line change if the note is wanted beside the globs.
 
 **Consequence.** Formatting drift and shell defects now fail a named check. This is the fifth
 instance of one shape to be removed from this repository — a gate that is configured and never
