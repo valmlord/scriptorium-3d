@@ -1402,3 +1402,47 @@ testing.md §7 specifies; the worker-side half is `WorkerLoop.whenIdle` (ADR-002
 asserted by outcome throughout, per ADR-0016, so no test in this layer waits on a duration — the
 integration test waits on an exact message count instead, which the protocol's one-response-per-message
 rule makes exact.
+
+---
+
+## ADR-0026 — A located address is not cached
+
+**Decision.** `locate` results are not cached, and `cache.ts` has no store for them. The cache stays
+the two byte-budgeted stores of ADR-0019 — pages and titles — and `locate` is the one `core` call that
+always crosses the thread boundary.
+
+**Why.** The key would have to be the page. ADR-0019 charges a key against its store's budget, and
+spells out why: an entry costs `(key.length + value.length) * 2`, and a page's key — the base-36
+rendering of its linear index — is as long as the page it names. A `locate` store inverts that
+relation into its extreme case, because here the key **is** the 3200-character page and the value is an
+address object. So an entry is about **6.4 KB of key** to save the **1.0 to 1.4 ms** a `locate` costs
+(ADR-0005). That is the worst ratio of anything the cache could hold, and it is the opposite end of the
+same arithmetic that made the title store's keys 99.2% of its ceiling.
+
+And no access pattern asks twice. ADR-0019 derives each ceiling from the pattern that revisits that
+store's contents — page-at-a-time inside a volume, and the camera turning inside a room. There is no
+such pattern here: **a search query is typed once, and the address it resolves to is what the
+navigation state then holds** (architecture §4), so the second lookup of a given page does not happen.
+A cache with no re-reads is a byte budget spent on nothing.
+
+**Alternatives rejected.**
+
+- _A third store keyed by the page._ The figures above: the cache's worst key-to-value ratio, buying
+  back a millisecond for a call nothing issues twice.
+- _A third store keyed by a hash of the page._ Replaces 6.4 KB of key with 32 bytes, and pays a
+  SHA-256 over 3200 characters on every lookup to save a `locate` that nothing repeats — and `core`'s
+  `locate` is the Feistel network run backwards, so the hash is a real fraction of what it saves. It
+  also introduces a failure mode this project does not currently have: two distinct pages hashing
+  alike would resolve one page to the other's address, silently, which is exactly the class of wrong
+  that ADR-0008 bought the mutation gate to defend against. Vanishingly unlikely is not the same as
+  structurally impossible, and the trade buys nothing.
+- _Caching the search query rather than the located page._ A short key, but the query is what is typed
+  once; `search` and `locate` are different functions, and the one with a reusable key is not the one
+  being asked about here.
+
+**Consequence.** The budget arithmetic of ADR-0019 covers the whole cache, so there is no third ceiling
+to derive and no third worst-case entry to name. The cost of the inverse direction is paid in full on
+every search — 1.05 ms on ADR-0005's Intel runner, 1.41 to 1.44 ms on its AMD one — which is under a
+tenth of a frame, once per query, and it is paid on the worker thread rather than the main one.
+`locate` is therefore also the one call whose `GenerationRequest.ids` is never empty (ADR-0025): there
+is no cache for it to hit.
