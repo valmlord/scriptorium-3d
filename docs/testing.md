@@ -58,26 +58,31 @@ codebase that gap is the whole risk. Stryker runs against `src/core` only:
 - `npm run test:mutation`, configured in `stryker.config.json`.
 - Threshold: **85% mutation score**, break the build below 75%.
 - **Nightly on `main`, and on demand** via `workflow_dispatch` — not on pushes or pull requests. The
-  run is 21 to 59 minutes and its verdict is not reproducible, so it is not a pre-merge gate
-  (ADR-0014).
-- The pull request path runs `npm run test:mutation:dry` instead: Stryker's dry run, about fifteen
-  seconds, which answers the one question a pull request can answer cheaply — does the harness still
-  start, instrument and get a green suite? It asserts the test count as well as the exit code,
-  because a broken dry run was observed reporting success on 43 of 229 tests.
+  run is 21 to 70 minutes, which is why it is not a pre-merge gate (ADR-0014).
+- The pull request path runs `npm run test:mutation:dry` instead: Stryker's dry run, a 34-second job
+  that adds nothing to the critical path, which answers the one question a pull request can answer
+  cheaply — does the harness still start, instrument and get a green suite? It asserts the test
+  count as well as the exit code, because a broken dry run was observed reporting success on 43 of
+  229 tests.
 
 If a surviving mutant turns out to be genuinely equivalent, it is excluded with a comment explaining why.
 Silently lowering the threshold is not an option.
 
-**The score is a floor, and the survivor list is not a finding.** Between two CI runs whose `src/`
-trees were identical, 56 of 587 distinct mutant positions changed verdict and the score moved 98.32
-to 93.43 — the whole of that drop is 31 kills that became survivals and 2 that went the other way.
-Hand-applying all five reported survivors on `ae0af83` killed every one of them, and five identical
-runs of one mutant produced three different verdicts.
+**The score moves by about two tenths of a point between runs, and a named survivor is a claim.**
+Two runs of the identical commit `e43d09b`, launched concurrently, scored 93.10 and 93.27; across
+the four runs taken since `d2aa600` the spread is 0.33. That is the whole of the run-to-run noise.
 
-So the error runs one way: a false survival lowers the score, a false kill is the rare case (2
-positions against 31). `break: 75` can fire on noise but cannot go green over a real gap. Read the
-number as a lower bound and nothing more. Before acting on a named survivor, apply the mutation to
-the file by hand and run the suite — the report is a claim. This is issue #6, and it is open.
+An earlier version of this section reported a five-point swing and called the verdict
+irreproducible. It was wrong: the swing was caused by `d2aa600` raising `testTimeout` from 5 s to
+30 s, and a timing-out test is a failing test that kills its mutant for the wrong reason. The
+correction, with the mechanism, is at the end of ADR-0014. The scores before that commit were
+inflated; `~93` is the honest number.
+
+Before acting on a named survivor, apply the mutation to the file by hand and run the suite — not
+because the report lies, but because the property tests run at 10 cases under Stryker and 1000
+everywhere else (ADR-0012), so a survivor may be one that 1000 cases would have killed. This is
+issue #6, and it is open — what remains is the residual 0.2 points and where `break` should sit now
+that it is defending against that rather than against six.
 
 Stryker re-runs the suite once per mutant and `src/core` yields close to 600 of them, so the property
 tests are capped at 10 cases under Stryker alone (`src/core/__tests__/property-runs.ts`, ADR-0012). Fewer
