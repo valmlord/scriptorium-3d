@@ -9,6 +9,7 @@ import {
 import { PAGE_ALPHABET } from '../alphabet';
 import { intToDigits } from '../bignum';
 import { getPage, getTitle, locate } from '../library';
+import { benchOptions } from './bench-samples';
 
 /**
  * Reported numbers for `npm run bench`. The threshold is *asserted* in
@@ -26,36 +27,6 @@ import { getPage, getTitle, locate } from '../library';
  * The reference machine's own figures are in SPEC §4.4, which is their one
  * home; they are not restated here.
  */
-
-/**
- * Samples per task, fixed rather than inferred from a time budget.
- *
- * Vitest otherwise runs each task for a wall-clock duration, so the number of
- * samples behind a median depends on how fast the machine is — and a median
- * that does not say how many samples it is made of is not a number anyone can
- * compare. `time: 0` disables the duration floor so that this count is the
- * only thing deciding the sample size, on every machine.
- *
- * 50 is chosen for what a median of 50 rules out: a scheduler hiccup has to
- * take 26 of the samples to move it, where a single reading or a median of
- * three can be moved by one. A task here costs one to fifty milliseconds, so
- * 50 of them is well under a second apiece.
- *
- * What it does **not** buy is agreement between runs. Measured on a shared
- * 4 vCPU container, the `getPage` median over 50 samples varied 9% across
- * eight consecutive repetitions and 80% over 150 — the spread does not shrink
- * with the sample count, because the noise is the host's own drift over
- * seconds rather than per-call jitter, and a longer median just averages a
- * longer stretch of it. So the run-to-run spread of a published figure is a
- * property of the machine, not of this constant, and no sample count would
- * make a gate built on these numbers decide by the code. That is why
- * `bench:report`'s CI job reports and never fails, and why the report carries
- * mean, min and p99 beside each median rather than the median alone.
- */
-const SAMPLES = 50;
-
-/** Fixed sample count on every machine; see `SAMPLES`. */
-const options = { iterations: SAMPLES, time: 0 } as const;
 
 /** Pick a sample, cycling, and fail loudly rather than silently on empty. */
 const cycle = <T>(values: readonly T[], index: number): T => {
@@ -112,7 +83,7 @@ describe('the bijection', () => {
     () => {
       getPage(cycle(addresses, forward++));
     },
-    options
+    benchOptions
   );
 
   let title = 0;
@@ -124,7 +95,7 @@ describe('the bijection', () => {
     () => {
       getTitle(cycle(books, title++));
     },
-    options
+    benchOptions
   );
 
   let backward = 0;
@@ -134,7 +105,7 @@ describe('the bijection', () => {
     () => {
       locate(cycle(pages, backward++));
     },
-    options
+    benchOptions
   );
 
   let edge = 0;
@@ -144,7 +115,7 @@ describe('the bijection', () => {
     () => {
       locate(cycle(edgePages, edge++));
     },
-    options
+    benchOptions
   );
 });
 
@@ -168,6 +139,6 @@ describe('a shelf', () => {
         getTitle(book);
       }
     },
-    options
+    benchOptions
   );
 });
