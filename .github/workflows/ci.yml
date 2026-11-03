@@ -303,12 +303,14 @@ jobs:
         run: npm ci
       - name: Runner image
         run: 'echo "image: $ImageOS/$ImageVersion"'
-      - name: Run 1
+      - name: Plain 1
         run: npx vitest run --reporter=./duration-reporter.mjs
-      - name: Run 2
+      - name: Plain 2
         run: npx vitest run --reporter=./duration-reporter.mjs
-      - name: Run 3
-        run: npx vitest run --reporter=./duration-reporter.mjs
+      - name: Coverage 1
+        run: npx vitest run --coverage --reporter=./duration-reporter.mjs
+      - name: Coverage 2
+        run: npx vitest run --coverage --reporter=./duration-reporter.mjs
 
   test-durations-b:
     runs-on: ubuntu-latest
@@ -323,9 +325,33 @@ jobs:
         run: npm ci
       - name: Runner image
         run: 'echo "image: $ImageOS/$ImageVersion"'
-      - name: Run 1
+      - name: Plain 1
         run: npx vitest run --reporter=./duration-reporter.mjs
-      - name: Run 2
+      - name: Plain 2
         run: npx vitest run --reporter=./duration-reporter.mjs
-      - name: Run 3
+      - name: Coverage 1
+        run: npx vitest run --coverage --reporter=./duration-reporter.mjs
+      - name: Coverage 2
+        run: npx vitest run --coverage --reporter=./duration-reporter.mjs
+
+  test-durations-c:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Runner image
+        run: 'echo "image: $ImageOS/$ImageVersion"'
+      - name: Plain 1
         run: npx vitest run --reporter=./duration-reporter.mjs
+      - name: Plain 2
+        run: npx vitest run --reporter=./duration-reporter.mjs
+      - name: Coverage 1
+        run: npx vitest run --coverage --reporter=./duration-reporter.mjs
+      - name: Coverage 2
+        run: npx vitest run --coverage --reporter=./duration-reporter.mjs

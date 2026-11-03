@@ -33,8 +33,8 @@ export default class DurationReporter {
       `${cpus[0]?.model} x ${cpus.length}, ${(os.totalmem() / 2 ** 30).toFixed(1)} GiB, Node ${process.version}, ${os.platform()}/${os.arch()}`
     );
     console.log('');
-    console.log(`### ${this.tests.length} tests, slowest 20`);
-    for (const t of [...this.tests].sort((a, b) => b.ms - a.ms).slice(0, 20)) {
+    console.log(`### ${this.tests.length} tests, slowest 30`);
+    for (const t of [...this.tests].sort((a, b) => b.ms - a.ms).slice(0, 30)) {
       console.log(`${t.ms.toFixed(0).padStart(7)} ms  ${short(t.file)} > ${t.name}`);
     }
     console.log('');
