@@ -181,8 +181,8 @@ export function randomAddress(): Address;
 export type PadMode = 'spaces' | 'random';
 export interface SearchHit {
   address: Address;
-  offset: number;
-} // offset = where the query starts
+  offset: number; // where the query starts
+}
 
 export function search(query: string, mode: PadMode, offset?: number): SearchHit;
 ```
