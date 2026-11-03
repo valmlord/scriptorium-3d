@@ -851,3 +851,128 @@ removed the spread" cannot yet be told apart from "this machine never exhibited 
 tightened on that evidence. It is recorded as a question rather than acted on because 92 does not
 depend on the answer, and because tightening a gate on a spread measured elsewhere is the move this
 record exists to stop. Issue #6 carries it.
+
+---
+
+## ADR-0019 — The worker cache is budgeted in bytes, separately for pages and titles
+
+**Decision.** The generation cache is **two** least-recently-used stores — one for page text, one for
+titles — each bounded by the total size in bytes of the keys and values it holds, not by an entry
+count. Each ceiling is a multiplier times the worst cost an entry of that kind can have, where the
+multiplier is the access pattern that revisits its contents. The key is charged against the budget.
+An entry that cannot fit its budget on its own is **refused**, and the cache is left byte for byte
+as it was. It sits on the main thread in front of the worker, not inside it.
+
+**Why.** A page is 3200 UTF-16 characters and a title 25, so "a hundred entries" means 640 KB of
+pages or 5 KB of titles — three orders of magnitude apart. An entry count is a number that means
+nothing here, and a single round figure in megabytes would have to mean one of the two.
+
+|        | worst-case entry               | multiplier             | ceiling                      |
+| ------ | ------------------------------ | ---------------------- | ---------------------------- |
+| pages  | `(3200 + 3200) * 2` = 12 800 B | `PAGES_PER_BOOK` = 410 | **5 248 000 B** (≈ 5.00 MiB) |
+| titles | `(3200 + 25) * 2` = 6 450 B    | volumes per room = 640 | **4 128 000 B** (≈ 3.94 MiB) |
+
+**Pages are bounded by one volume**, because that is the bound of the only access pattern that
+revisits a page: reading is page-at-a-time inside a book — flip forward, flip back, follow a search
+hit and return to it — and a page revisited across volumes is a coincidence rather than a pattern
+worth 6.4 KB of retention each. At 1.0 to 1.35 ms a page (ADR-0005), a full volume retained is 410
+to 553 ms of generation that a reader walking a book never pays twice.
+
+**Titles are bounded by one room**, because inside a room the camera _turns_. Titles resolve when the
+camera is close enough to read them and are cancelled when it is not (architecture §3), and four of
+a room's six walls carry shelves, so the set a turn can revisit is the whole room: 640 volumes. At
+25.1 to 33.4 ms a shelf of 32 that is 502 to 668 ms — ten to twenty frames' worth — not paid again
+for turning around. Leaving a room drops its titles, which is intended: the room behind you is one
+out of some 10^4975, and keeping it would be keeping an arbitrary room forever.
+
+Both are written as a multiplier times a worst case rather than as a round figure, because here the
+worst case **is** the realistic one. A key is short only for a room near the start of the library; a
+room reached by a deep link or by "open a random book" has a 3197-digit name. And each number keeps
+one home (ADR-0013): the ceilings are derived from `core`'s own `PAGES_PER_BOOK`, `PAGES_PER_ROOM`,
+`PAGE_LENGTH` and `TITLE_LENGTH`, and the tests assert the _derivation_ — "this budget holds one
+volume of worst-case page entries" — rather than restating the figure. Total resident cost is
+9 376 000 B, about 8.94 MiB: small beside a room's instanced geometry, and **bounded**, which is the
+property that matters. It does not grow with how long the camera has been moving.
+
+**Why the key is charged, and why it is a rendered string.** A key is `toLinear(address).toString(RADIX)`
+rather than the `Address`: an `Address` is a plain object, so two addresses naming the same page are
+two objects and identity is not a key, while `toLinear` is the one canonical ordering (SPEC §3), so
+the rendering is total and injective over the address space. Base 36 rather than base 10 because
+both are native and the base-36 form is 3200 characters where the decimal form is 4981. The largest
+linear index is one below `36 ** 3200`, which is exactly `PAGE_LENGTH` base-36 digits — so **a
+page's key is as long as the page it names, and a title's key is 128 times the title.** Dismissing
+keys as overhead would let the title store hold 128 times the bytes it claims, so an entry costs
+`(key.length + value.length) * 2`: two bytes per UTF-16 code unit, and both alphabets are inside the
+BMP, so no character is a surrogate pair. What is _not_ counted is the engine's own per-entry
+bookkeeping, because it is not observable from here and a budget cannot rest on a number that cannot
+be read.
+
+**Why an oversized entry is refused rather than accommodated.** The check runs before anything is
+mutated, so nothing already stored under that key is displaced by a value that could not have been
+kept. A refusal is a cache miss, which every caller already handles — the next `get` returns
+`undefined` and the value is recomputed — so the rule needs no new error type and no return value
+for a caller to remember to check. With the two ceilings above no page or title can be refused: the
+largest page entry is one 410th of its budget. This is what a budget too small for its contents
+does, not a case the library reaches.
+
+**Why it is in front of the worker rather than inside it.** A hit served from inside would still
+cost two `postMessage` hops and a task-queue turn, and that is the one part of the round trip a cache
+can remove entirely.
+
+Purity is what makes any of this assertable: no `Date.now()`, no timer, no `Math.random()`
+(architecture §5). The only state is the map and a running byte total, so the same sequence of
+operations produces the same contents and the same recency order on every machine, and eviction can
+be a property test rather than a sleep.
+
+**Alternatives rejected.**
+
+- _One store with prefixed keys._ A title and page 0 of the same volume share a linear index, so one
+  map would have the same key naming 25 characters in one moment and 3200 in the next, each
+  overwriting the other at a tenth of the cost it was admitted for. A prefix guards against that;
+  two stores make it unrepresentable, and are what give each budget the independence its test
+  asserts.
+- _An entry count._ The same number means 640 KB or 5 KB depending on which store it lands in.
+- _A time-to-live._ Needs a clock, which architecture §5 keeps off this path, and would make
+  eviction unassertable — the test would become a sleep. Nothing in the library goes stale: an
+  address generates the same page forever (ADR-0003), so there is nothing for a TTL to protect
+  against.
+- _Keying by the `Address` object in a `Map`._ Object identity is not a key, and the structural key
+  the alternative implies is a string in the end anyway.
+- _Emptying the cache to admit an oversized entry._ Trades a whole working set for one entry that
+  the next insertion would evict anyway.
+- _A `set` that returns whether it stored._ A second contract to keep in step with the refusal rule,
+  for information the next `get` already gives.
+
+**Open: does the long key have to repeat?** The title store pays its budget almost entirely in keys.
+Of its 4 128 000 bytes, the titles themselves are 32 000:
+
+|                                  | bytes     | share of the ceiling |
+| -------------------------------- | --------- | -------------------- |
+| title text — 640 × 25 characters | 32 000    | 0.8%                 |
+| keys — 640 × 3200 characters     | 4 096 000 | 99.2%                |
+
+Charging those keys is still right, for the reason above. But _charging_ a key and _repeating_ it are
+different questions, and only the first is decided here. **All 640 volumes of a room share one room
+index**, and a room is precisely the bound the title ceiling is derived from, so a structure nested
+by room would pay the long key once instead of 640 times: one room key at worst 6400 bytes, plus 640
+in-room entries of `(2 + 25) * 2` = 54 bytes, which is about 41 KB of characters and lands near
+46 KB once the nested map's own entry is counted. Two orders of magnitude, for the same 640 titles
+and the same access pattern.
+
+**It is recorded as a question rather than acted on because four megabytes is arithmetic, not
+measured harm.** `ui/` and `engine/` do not exist yet, so there is no profile in which this store is
+the thing that hurts, and restructuring a correct, bounded, tested module on a projection is
+optimising without a number — which is the move ADR-0013 removed from the performance budget and
+ADR-0014 from the mutation gate. A flat map also has the simpler contract, and the contract is what
+this module is for. What to put to a profile when there is one: **is the title store's resident cost
+ever a binding constraint — and if it is, does nesting by room earn the second level of indirection
+it adds to the hit path?** Either answer is cheap to act on, because the ceiling is derived from
+`PAGES_PER_ROOM / PAGES_PER_BOOK` and the key is rendered in one function; neither is spread across
+the module.
+
+**Consequence.** A hit is a `Map` lookup plus one key rendering — V8 converts a 16 545-bit `bigint`
+to base 36 natively in about 0.1 ms — against the 1.0 to 1.35 ms `getPage` and 0.73 to 0.98 ms
+`getTitle` it replaces, an order of magnitude under what it saves. ADR-0016's rule that a cancelled
+result never reaches the cache is the **client's** to enforce, by not calling `setPage` or `setTitle`
+for a cancelled request id: this module holds no opinion about request ids, which is why the rule
+cannot live here.
