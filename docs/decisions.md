@@ -486,3 +486,39 @@ pull request gate, and that reason was always sufficient on its own.
 
 Issue #6 stays open, with its premise corrected: what remains to establish is the residual 0.2
 points and where `break` should sit now that it is defending against that rather than against six.
+
+---
+
+## ADR-0015 — Formatting and shell are CI stages, not hook conveniences
+
+**Decision.** Every tool in `code-style.md` §8's table gets a CI job. The Husky hook is explicitly
+the convenience copy, and only for tools the lockfile already installs.
+
+**Why.** §8 named ESLint, Prettier and `tsc` as required CI stages. Prettier was enforced only by
+`lint-staged` in the pre-commit hook, and shell by nothing, which let four documents stay
+unformatted from `dd0c833` through three merged pull requests. A hook sees the files one local
+commit stages; it is bypassed by `--no-verify`, by a web edit, and by any file that was not staged
+at the time. A hook task that spawns a binary npm does not provide blocks commits on a machine that
+lacks it — observed, with `Task failed to spawn: shellcheck ENOENT` — which is why shell is linted
+in CI only.
+
+`format` and `shell-lint` are separate jobs rather than steps in `verify`, because the name of a red
+check is the first diagnostic anyone reads, and because an independent job still reports when
+`verify` has failed for another reason. `format:check` is in `verify` as well, so a local run
+catches drift before a push.
+
+ShellCheck runs at its default check set. `--enable=all` adds only SC2250 here, and a gate whose
+findings are all taste trains people to silence it. It is taken from the `ubuntu-latest` image
+rather than pinned, trading reproducibility for zero setup; the job prints the version so that a
+finding introduced by an image bump is traceable. Pinning is a one-line change if that trade turns
+out wrong.
+
+The file list for `lint:shell` comes from `git ls-files '*.sh' '.husky/*'` rather than being
+enumerated in the workflow, so a new script is covered on the day it lands instead of when someone
+remembers to extend a list.
+
+**Consequence.** Formatting drift and shell defects now fail a named check. This is the fifth
+instance of one shape to be removed from this repository — a gate that is configured and never
+invoked reports a safety that is not there — after `_comment_timeout`, the budget written beside a
+`bench` task, the `mutation` job hidden behind a skipped dependency, and a dry-run check that passed
+on 43 of 229 tests.
