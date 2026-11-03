@@ -416,6 +416,17 @@ per-mutant deadline (`timeoutMS` 15 s plus `timeoutFactor` 2 x the dry-run time,
 slow mutants are still Stryker's to kill and only the dry run's ceiling moves. Verified by setting
 it to 50 ms and watching the dry run fail with the CI error verbatim.
 
+**And a fourth, left inherited by this record for ten decisions.** The paragraph above names Vitest's
+5 s `testTimeout` as a budget nobody chose, and then raises it on exactly one of the three rows of the
+table at the top of this record — the mutation run, which is where it had already produced a visible
+failure. `npm run test` and `npm run coverage`, the other two rows, read `vite.config.ts`, which set no
+`testTimeout` at all and so kept the default this record had just finished calling arbitrary. The suite
+then grew into it: five property tests failed on timeouts alone on a contended machine, and on
+`ubuntu-latest` the slowest test in the suite reaches 24.0 s under coverage. ADR-0028 chooses both that
+ceiling and the per-hook one, on figures measured there. Nothing above changes — the case count, the
+budget's absence under instrumentation and the Stryker ceiling are all as recorded — except that the
+"third budget" was two, and the second one was the one every pull request runs.
+
 **Consequence.** `vite.config.ts` and `vitest.stryker.config.ts` each pass a flag down through
 `test.env`, because the v8 provider instruments through an inspector session that leaves no trace
 in the worker's own environment. Stryker also runs only `src/core`'s tests: the two tests in
@@ -1510,3 +1521,174 @@ specification and not a measurement, and a browser `Worker` is not reachable fro
 environment this suite runs in. The Playwright suite exercises it once there is a page that loads the
 worker (testing.md §6), which is M4/M5. Until then it is the one claim in this layer resting on a
 specification rather than on a test.
+
+---
+
+## ADR-0028 — The suite's per-test and per-hook ceilings are chosen, and calibrated on CI
+
+**Decision.** `vite.config.ts` sets **`testTimeout: 25_000`** and **`hookTimeout: 50_000`**, replacing
+Vitest's 5 s and 10 s defaults. Both are hang guards and neither is a performance gate. Three per-file
+overrides were re-examined against them: `library.test.ts`'s 120 s on five properties stays,
+`layer-boundaries.test.ts` loses its `testTimeout` and keeps its `hookTimeout`, and
+`worker-thread.integration.test.ts` loses both. `src/__tests__/test-budgets.test.ts` asserts that the
+ceiling the runner applies is the one the config declares, and that nothing outside the config lowers
+either one.
+
+**Why.** `vitest.stryker.config.ts` raised `testTimeout` to 30 s with the reasoning written out — "not
+a budget anyone chose, and it decided the mutation job by coin flip" — and ADR-0012 recorded it as a
+third budget found the hard way. It raised the default only on the path where it had already produced a
+visible failure. `vite.config.ts`, which every `npm run test`, every CI `verify` and every
+`npm run coverage` reads, was left on the default, and the suite has grown into it: on a contended
+developer machine five tests failed, all on timeouts and none on an assertion, at 5341 to 7871 ms
+(issue #35). The same suite on the same machine idle passes all 556 in 26.8 s, and CI takes 18.9 s wall
+with 45.4 s of test time. So nothing is broken today; what exists is a gate that decides by how busy
+the machine is, which is what ADR-0013 was written about.
+
+It is also not the sort of thing a reviewer can see. A test that times out **fails**, so under an
+unchosen ceiling a slow test and a wrong one are the same red, and ADR-0014's correction is what that
+costs: a 5 s cap was killing mutants on the clock rather than on an assertion and inflating the
+mutation score by five points.
+
+**What this is not.** The wall-clock budget is testing.md §5's, asserted in
+`src/core/__tests__/performance.test.ts` against a committed baseline and enforced by `verify`
+uninstrumented on every push (ADR-0013, ADR-0012). Nothing here is what notices the library getting
+slower, and raising a timeout cannot hide a slowdown, because the budget that would catch one is a
+separate assertion in a separate file. Conversely a timeout is useless as a performance gate: it fires
+on the machine being busy, which is the property ADR-0013 removed from the budget.
+
+**The measurement.** Taken on `ubuntu-latest`, because that is the machine that enforces this
+(ADR-0013) and it is also where the slower of the two consumers runs. A throwaway reporter printing
+each test's `onTestCaseResult` duration and each module's `onTestModuleEnd` diagnostics — a module's
+residual, its own duration less the sum of its tests', is what a `beforeAll` costs — pushed on a scratch
+branch so that both commands could be timed on real runners. **Eighteen runs**: twelve of
+`npm run test` and six of `npm run coverage`, over three CPU models, Node v22.23.4, images
+ubuntu24/20261026.354.1 and ubuntu24/20261101.360.1. Runs
+[41688546201](https://github.com/valmlord/scriptorium-3d/actions/runs/41688546201) and
+[41689066798](https://github.com/valmlord/scriptorium-3d/actions/runs/41689066798).
+
+| mode               | machine            | runs | slowest test in the suite | slowest test this ceiling governs |      heaviest hook |
+| ------------------ | ------------------ | ---: | ------------------------: | --------------------------------: | -----------------: |
+| `npm run test`     | Intel Xeon 6973P-C |    3 |            4137 – 4483 ms |                    1624 – 1864 ms |     2108 – 2320 ms |
+| `npm run test`     | AMD EPYC 7763      |    7 |            5457 – 5866 ms |                    2211 – 2927 ms |     3298 – 3590 ms |
+| `npm run test`     | AMD EPYC 9V45      |    2 |            3176 – 3401 ms |                    1232 – 1399 ms |     2230 – 2328 ms |
+| `npm run coverage` | AMD EPYC 7763      |    4 |        23 652 – 24 007 ms |                3905 – **4318** ms | 7572 – **9328** ms |
+| `npm run coverage` | AMD EPYC 9V45      |    2 |        12 619 – 12 671 ms |                    2244 – 2319 ms |     4371 – 4858 ms |
+
+The two columns differ because five properties in `library.test.ts` already carry their own 120 s — so
+the suite's slowest tests are not the ones the configured ceiling decides. **It is the governed column
+that calibrates `testTimeout`**, and the ungoverned one that settles whether those five overrides can
+go. The heaviest hook is the `beforeAll` in `layer-boundaries.test.ts`, which builds a type-aware
+TypeScript program for the whole project; it is the only hook in the suite that costs anything, and it
+is governed by that file's own `hookTimeout`.
+
+Three things the figures say that reading the repository does not. `ubuntu-latest` draws more than one
+machine, and on a page the three models here span a factor of 1.8 on the same test — so a figure taken
+from one of them is not a figure about CI. Coverage instrumentation costs between 1.6x and 4.2x, so the
+`coverage` job and not `verify` is the binding case, and `coverage` is also the run where the wall-clock
+budget is deliberately not asserted (ADR-0012). And the suite's slowest test reaches **24.0 s** — Vitest's
+default is not merely unchosen, it is five times under what the suite already does.
+
+**Why 25 s.** A threshold is really a statement about how much slower than the worst observation a run
+may be before it is called a hang:
+
+| `testTimeout`  | vs. the 4318 ms worst governed observation | what it means                                                                                         |
+| -------------- | -----------------------------------------: | ----------------------------------------------------------------------------------------------------- |
+| 5 s, inherited |                                  **1.16x** | already crossed: five tests at 5341 to 7871 ms on a contended machine (#35)                           |
+| 10 s           |                                      2.32x | 27% above the worst contended observation on record. The ADR-0013 mistake with a wider number         |
+| **25 s**       |                                  **5.79x** | one hang costs 25 s against an 18.9 s suite                                                           |
+| 30 s           |                                      6.95x | `vitest.stryker.config.ts`'s figure, derived from Stryker's own deadline and not from these durations |
+| 120 s          |                                     27.79x | `library.test.ts`'s figure. One hang costs six times the whole job                                    |
+
+Five times the slowest observation is the margin ADR-0013 settled on for the performance budget, and for
+the same reason: what is being guarded against is unbounded — a promise that never settles, a loop that
+never exits, a thread that never replies — so margin costs no detection power at all, where a ceiling
+sitting a few percent above the enforcing machine's own value decides by scheduler luck. The other
+direction has a cost too, and it is the one a looser figure ignores: a ceiling is how long CI waits for
+a hang. At 25 s a hung test roughly doubles the job, which is cheap and visible; at 120 s it is six jobs.
+
+**Why 50 s for hooks, and what it honestly governs.** 5.4x the 9328 ms worst hook observation, by the
+same arithmetic. **It governs no hook that exists**, and that is worth stating rather than leaving for
+a reader to discover: the only two files with hooks both set their own, so the global reaches nothing
+today. It is set because the next file that adds a hook would otherwise inherit a figure nobody chose —
+and the figure nobody chose had already been reached. Vitest's default is 10 s, and the heaviest hook on
+record is 9328 ms: **within 7% of it**, under a setting that has never been examined. That it reaches a
+hook at all was verified rather than assumed, by removing `layer-boundaries.test.ts`'s own override and
+setting the global to 50 ms: `Hook timed out in 50ms`, with that file's 20 tests skipped.
+
+**The per-file overrides, re-examined.** Three existed. One was load-bearing, one had inverted, one had
+never enforced anything:
+
+| file                                                     | before                                      | after                 | why                                                                              |
+| -------------------------------------------------------- | ------------------------------------------- | --------------------- | -------------------------------------------------------------------------------- |
+| `src/core/__tests__/library.test.ts`                     | `PROPERTY_TIMEOUT_MS = 120_000`, five tests | unchanged             | those five reach 24.0 s under coverage; 25 s would be 1.04x an observed value    |
+| `src/__tests__/layer-boundaries.test.ts`                 | `testTimeout: 20_000, hookTimeout: 60_000`  | `hookTimeout: 60_000` | the 20 s had stopped raising the ceiling and started lowering it                 |
+| `src/worker/__tests__/worker-thread.integration.test.ts` | `testTimeout: 60_000, hookTimeout: 120_000` | removed               | 41x and 530x this file's own worst observations — 610 ms a test, 94 ms the build |
+
+The middle row is the interesting one and it is this repository's recurring defect arriving by a route
+nobody built: nothing about that file changed, and a line written to **raise** a ceiling became a line
+that **narrows** one, silently, the moment the global passed it. Nothing would have gone red. The
+bottom row is the familiar shape — figures sized against Vitest's default rather than against the
+file, which this file's own measurements put at 610 ms for its slowest test and 45 to 94 ms for the
+Vite build in its `beforeAll`.
+
+**What keeps it honest.** `src/__tests__/test-budgets.test.ts` asserts the per-test ceiling **the runner
+applied to the test doing the asserting**, read from `getCurrentTest()`, against what the config
+declares. Not that the key is present: a key the tool silently discards is present too, which is the
+`_comment_timeout` shape this repository has now removed eleven of. It then scans the suite for budgets
+declared outside the config — `vi.setConfig` calls and `*_TIMEOUT_MS` constants — and asserts each one
+**raises** a ceiling rather than lowering it, which is the `layer-boundaries.test.ts` inversion above
+turned into a red test. The list of the two budgets that exist is asserted exactly, so the scan cannot
+pass by matching nothing: that is ADR-0014's dry run reporting success on 43 of 229 tests, in a smaller
+place. No figure is written in that file; both come from the config, so it cannot become a number's
+second home (ADR-0013).
+
+Both ceilings were watched firing, and the guard was watched going red six ways: the configured
+`testTimeout` at 50 ms turns five of `bignum.test.ts`'s eighteen red with `Test timed out in 50ms`; the
+guard goes red on the `testTimeout` being deleted, on it being set back to 5 s, on the `hookTimeout`
+being deleted, on a per-file `hookTimeout` of 40 s, on the removed `testTimeout: 20_000` being put back,
+and on `PROPERTY_TIMEOUT_MS` dropping to 20 s.
+
+**Alternatives rejected.**
+
+- _Leave the default and let the five contended failures stand._ They are timeouts on property tests
+  that testing.md §2 requires at 1000 cases. A flaky red is fixed or deleted the day it is noticed
+  (testing.md §9), and retrying discards the information the test exists to produce.
+- _10 s._ 2.32x the worst governed observation and 27% above the worst contended one. A gate that close
+  to a measured value is the arrangement ADR-0013 removed after a budget failed one CI run at 5.052 ms
+  and passed the next.
+- _30 s, matching `vitest.stryker.config.ts`._ Reads tidy and is derived from the wrong thing: that
+  figure's lower bound is Stryker's own per-mutant deadline of about 29 s, which has nothing to do with
+  how long this suite's tests take. Two numbers that agree for unrelated reasons invite a future change
+  to move both. Keeping them apart also keeps that override meaningful — it is still a raise, and it
+  stops being one if this ceiling ever passes 29 s, which is now noted there.
+- _One ceiling wide enough for the whole suite, so the five `library.test.ts` overrides could go._ That
+  means 120 s, since those five reach 24.0 s under coverage. It buys tidiness with a hang guard that
+  waits two minutes per test, and 25 s is already 5.79x what it has to cover.
+- _Calibrate on the development machine._ It is not the machine that enforces this (ADR-0013), and it
+  is 1.8x off the runners in both directions depending on which model `ubuntu-latest` draws.
+- _Scale the ceiling by a measured instrumentation factor, so `coverage` and `verify` get different
+  figures._ Invents a number that moves with the runner image and the provider, which ADR-0012 rejected
+  for the budget and ADR-0014 rejected for the runner.
+- _Record the figure in testing.md as well._ The budget of testing.md §5 lives in that document because
+  it is a stated contract about the library's speed. A hang guard is not a contract about anything; its
+  home is the config that applies it and this record. One home (ADR-0013).
+
+**Consequence.** `npm run test` and `npm run coverage` now run on a ceiling derived from what they
+actually do on the machine that enforces it, and a per-file budget that stops raising one goes red
+instead of quietly narrowing it. `vitest.stryker.config.ts` keeps its own 30 s and now overrides a chosen
+25 s rather than an unexamined 5 s; its comment says so, and says what makes it stop being worth having.
+`vite.config.ts` also imports `defineConfig` from `vitest/config` rather than `vite`, because its `test`
+block is Vitest's and Vite's `UserConfig` does not carry it — so that block had been type-checked only
+by accident, in programs that happened to include another file importing `vitest/config`, and reading it
+from a test is what surfaced that.
+
+**Open: nothing in CI reports a test duration, so the next time the suite grows into a ceiling nobody
+will see it either.** The figures above came from a reporter on a scratch branch and are not reproducible
+from `main`; six months from now the only way to know whether 25 s is still 5.79x or 1.5x is to take the
+measurement by hand again, which is exactly how the 5 s default survived as long as it did. The guard
+test catches a ceiling that stops being applied, not one that stops being generous. The cheap answer is
+the one `generation-cost` already uses for the benchmark table (ADR-0013): publish the slowest tests to
+the run summary, where GitHub shows them on the run's own page, with no threshold attached — a figure
+nobody can find without opening a log is a figure nobody will find. Whether that earns a job is the
+question, and it is recorded rather than acted on because `verify`'s critical path is held by other jobs
+and adding a step to it would be the easy half of the answer with the reporting half missing.

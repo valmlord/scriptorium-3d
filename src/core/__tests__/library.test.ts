@@ -48,10 +48,24 @@ const LIBRARY_SIZE_BYTE_LENGTH = Math.ceil(LIBRARY_SIZE.toString(2).length / 8);
 /**
  * A property test over 1000 cases of a 16544-bit permutation is seconds of
  * real work, and several times that under the v8 coverage instrumentation of
- * `npm run coverage`. Vitest's 5-second default is sized for unit tests, so
- * the three properties that testing.md §2 requires to run at >= 1000 cases
- * carry an explicit budget instead. This raises no bar and weakens no
- * assertion: the run count stays at 1000 and a wrong bijection still fails.
+ * `npm run coverage`. Five properties in this file carry this budget: the ones
+ * an order of magnitude slower than anything else in the suite, which is not
+ * the same set as everything testing.md §2 requires at >= 1000 cases — the
+ * length and alphabet properties run on the configured ceiling and are
+ * comfortable there. Five, not the three this comment used to claim.
+ *
+ * They carry a budget because of what they cost, and not because the
+ * configured ceiling is unexamined: since ADR-0028 it is chosen, and
+ * `vite.config.ts` is where it lives. Nor can it simply be raised to cover
+ * these five. On `ubuntu-latest` they reach 3.2 to 5.9 s plain and 12.6 to
+ * 24.0 s under coverage, against 4.3 s for the slowest test that ceiling
+ * governs (ADR-0028) — so a global wide enough for 24.0 s would sit a few
+ * percent above the enforcing machine's own observation, which is the mistake
+ * ADR-0013 exists to stop. 120 s is five times that 24.0 s, the same multiple
+ * `vite.config.ts` derives its own figures with.
+ *
+ * This raises no bar and weakens no assertion: the run count stays at 1000 and
+ * a wrong bijection still fails.
  */
 const PROPERTY_TIMEOUT_MS = 120_000;
 

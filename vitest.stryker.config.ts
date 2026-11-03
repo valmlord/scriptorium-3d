@@ -42,8 +42,15 @@ export default defineConfig({
     // in performance.test.ts and is enforced by `verify` (ADR-0013), and a slow
     // *mutant* is still bounded by Stryker's own deadline — `timeoutMS` 15 s
     // plus `timeoutFactor` 2 x the dry-run time, about 29 s — which fires
-    // first, so this ceiling only lifts the dry run. The same default was
-    // raised for the same reason in src/__tests__/layer-boundaries.test.ts.
+    // first, so this ceiling only lifts the dry run.
+    //
+    // Since ADR-0028 the base config this spreads is no longer on Vitest's
+    // default either, so what this line now overrides is a chosen 25 s rather
+    // than an unexamined 5 s. It stays, and it is still a raise, because the
+    // number it has to clear is Stryker's own ~29 s deadline and not anything
+    // the suite's durations say: the two figures are derived from different
+    // things and happen to be close. If the base ever rises above 29 s this
+    // line stops meaning anything and should go.
     testTimeout: 30_000,
     // Stryker mutates `src/core` (ADR-0008), so `src/core`'s own tests are
     // what judge the mutants. The two tests in `src/__tests__` drive the
