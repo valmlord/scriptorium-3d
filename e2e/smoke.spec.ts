@@ -24,12 +24,20 @@ test('app boots with valid WebGL context and no console errors', async ({ page }
   const canvas = page.locator('canvas#canvas');
   await expect(canvas).toBeVisible();
 
-  // Verify WebGL context exists by checking a simple WebGL property
+  // The engine's renderer holds a `webgl2` context on this canvas, so asking
+  // for `webgl2` hands back that same context and creates nothing.
+  //
+  // This asked for `webgl` first until M4. Nothing drew then, so the request
+  // created a fresh WebGL 1 context and the assertion passed. Now that the
+  // engine owns the canvas, a request for a different context type is refused
+  // and fires `webglcontextcreationerror` on the canvas — where the renderer's
+  // own listener is still attached, so the probe made the application log
+  // `THREE.WebGLRenderer: A WebGL context could not be created` and failed the
+  // console assertion below. The probe has to ask for what the engine uses.
   const hasWebGL = await page.evaluate(() => {
-    const canvas = document.getElementById('canvas') as HTMLCanvasElement;
-    if (!canvas) return false;
-    const gl = canvas.getContext('webgl') || canvas.getContext('webgl2');
-    return gl !== null;
+    const canvas = document.getElementById('canvas');
+    if (!(canvas instanceof HTMLCanvasElement)) return false;
+    return canvas.getContext('webgl2') !== null;
   });
 
   expect(hasWebGL).toBe(true);

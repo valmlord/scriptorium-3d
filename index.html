@@ -3,10 +3,18 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Every page of 3200 characters over a 36-glyph Cyrillic alphabet, at a deterministic address."
+    />
     <title>Scriptorium.3d</title>
+    <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
-    <canvas id="canvas"></canvas>
+    <!-- The one surface the engine draws into. `aria-label` rather than fallback
+         content: there is nothing inside a canvas for a screen reader to read,
+         and the reader of M6 is where the text itself becomes real DOM text. -->
+    <canvas id="canvas" aria-label="The hexagonal gallery of the library"></canvas>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
