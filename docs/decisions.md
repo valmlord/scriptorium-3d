@@ -522,3 +522,40 @@ instance of one shape to be removed from this repository — a gate that is conf
 invoked reports a safety that is not there — after `_comment_timeout`, the budget written beside a
 `bench` task, the `mutation` job hidden behind a skipped dependency, and a dry-run check that passed
 on 43 of 229 tests.
+
+---
+
+## ADR-0016 — A cancelled generation request rejects; it does not hang
+
+**Decision.** The worker client's cancellation rejects the pending promise with a named domain
+error carrying the request id and the address. `ROADMAP.md`'s M3 wording — "a cancelled request
+never resolves" — is corrected to say so.
+
+**Why.** Read literally, the original wording specifies a promise that never settles. That is a
+retained continuation per cancelled request, and cancellation exists here precisely because the
+camera flies past shelves continuously, so the leak would grow with the motion the feature is for.
+A promise that never settles also cannot be awaited in a test without a timeout, which is how
+"asserted by outcome" quietly becomes a sleep.
+
+Both halves of what the milestone asks for survive the change: the caller observes an outcome, and
+the result never reaches the cache. What changes is that the outcome is observable and the
+continuation is released. The error is a dedicated type, following `src/core/errors.ts` where every
+domain situation is a named type carrying context rather than a bare `Error`.
+
+**What the test then asserts**, none of it needing a timer: the returned promise rejects with that
+type; the cache holds no entry for the address afterwards; and a late worker message carrying the
+cancelled request's id is ignored rather than cached. The third is the real hazard — cancellation
+races the reply, and the honest implementation assumes the reply is already in flight.
+
+**Alternatives rejected.**
+
+- _Leave the wording and implement it literally._ A documented leak is still a leak, and the
+  milestone's review gate would then certify it.
+- _Resolve with a sentinel value instead of rejecting._ Every caller must then remember to check for
+  it, and a forgotten check renders a cancelled page. A rejection cannot be ignored silently.
+- _Expose an `AbortSignal` and let the caller own the lifetime._ Closer to the platform, and worth
+  revisiting when there is a second caller; today it moves the bookkeeping into `ui/` for one call
+  site.
+
+**Consequence.** M3's "Cancellation asserted by outcome" is answerable without a timer, and the
+frame budget that gates the milestone is measured against a client that releases what it cancels.

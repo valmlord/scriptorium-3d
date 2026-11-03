@@ -57,7 +57,7 @@ Worker plus typed client: request ids, cancellation, LRU cache, warm-up on start
 
 **Tests.** The protocol handler unit-tested as a pure function, including malformed and out-of-order
 messages. One integration test through a real `Worker`. Cancellation asserted by outcome — a cancelled
-request never resolves and its result never reaches the cache.
+request rejects with a named domain error and its result never reaches the cache (ADR-0016).
 
 **Done when.** Generating 32 shelf titles drops no frame, measured rather than asserted by feel.
 
