@@ -84,27 +84,28 @@ timeline rather than a second animation that has to be kept in sync with the fir
 
 **Why.** One page is invisible; a shelf of them is not. Measured by the `generation-cost` job on
 `ubuntu-latest`, the machine that enforces this project's gates, as medians of 50 warmed samples
-over three runs on Node 22, image `ubuntu24` — CI 41639200450, and 41640084878 attempts 1 and 2,
-whose benchmark code is identical:
+over five runs on Node 22, image `ubuntu24`, whose benchmark code is identical — CI 41639200450,
+41640084878 attempts 1 and 2, 41641061495 and 41641249757:
 
-| Operation            | AMD EPYC 7763 (2 runs)              | Intel Xeon 6975P-C (1 run) |
+| Operation            | AMD EPYC 7763 (4 runs)              | Intel Xeon 6975P-C (1 run) |
 | -------------------- | ----------------------------------- | -------------------------- |
-| `getPage`            | 1.35 ms                             | 1.01 ms                    |
+| `getPage`            | 1.34–1.35 ms                        | 1.01 ms                    |
 | `getTitle`           | 0.97–0.98 ms                        | 0.73 ms                    |
-| `locate`             | 1.41–1.42 ms                        | 1.05 ms                    |
-| A shelf of 32 titles | **32.5–32.9 ms — 1.95–1.97 frames** | **25.1 ms — 1.51 frames**  |
+| `locate`             | 1.41–1.44 ms                        | 1.05 ms                    |
+| A shelf of 32 titles | **32.5–33.4 ms — 1.95–2.00 frames** | **25.1 ms — 1.51 frames**  |
 
 Two columns because `ubuntu-latest` is a label and not a machine: those runs landed on two CPU
 models, and the Intel one is 34% faster on a page. They are reported separately rather than averaged,
 because the average of two machines is a machine that does not exist. Within one model the figures
-are reproducible — the two AMD runs agree to 0.1% on a page and 1.1% on a shelf — so the gap between
-the columns is the hardware, not the apparatus.
+are reproducible — the four AMD runs span 0.8% on a page and 2.6% on a shelf — so the gap between
+the columns is the hardware, not the apparatus. Which is also why the job that produces these
+figures reports and does not gate: a threshold here would be decided by which host the runner drew.
 
 **A shelf is one and a half to two frames, and the camera is usually flying while those titles are
 being resolved** — so they are frames the user sees go missing. That is the argument for the thread,
 and it is not close on either machine. A cold page is worse again: the first `getPage` of a fresh
-process measured 6.97 ms on the Intel runner and 12.09 ms on an AMD one — up to three quarters of a
-frame for one page — which is what the worker's warm-up on startup is for.
+process measured 6.97 ms on the Intel runner and 10.5 to 12.1 ms on the AMD one — up to three
+quarters of a frame for one page — which is what the worker's warm-up on startup is for.
 
 And it cannot be optimised away. `getTitle` renders 25 digits where `getPage` renders 3200 and still
 costs 72–73% of it on every run, so what is left when nearly all the rendering is gone is the
