@@ -141,6 +141,14 @@ export class InvalidSearchQueryError extends Error {
  * an integer, or far enough along that the query would run past the end.
  * Carries the query length and the largest offset that would still fit, which
  * is the number the caller actually needs in order to correct the request.
+ *
+ * The message states the requirement as a single compound predicate -- an
+ * integer in the range -- rather than naming the range alone, because the range
+ * alone is a false statement for one of the three rejected shapes: `1.5` is
+ * refused while it *is* in `[0, maxOffset]`, and `not in [0, 3195]` sent the
+ * reader looking for a bound that had not been crossed. A message that names a
+ * range which cannot apply costs more than one that says nothing
+ * (code-style.md §4).
  */
 export class InvalidSearchOffsetError extends Error {
   readonly offset: number;
@@ -149,7 +157,7 @@ export class InvalidSearchOffsetError extends Error {
 
   constructor(offset: number, queryLength: number, maxOffset: number) {
     super(
-      `Search offset ${String(offset)} not in [0, ${String(maxOffset)}] for a query of length ${String(queryLength)}`
+      `Search offset ${String(offset)} is not an integer in [0, ${String(maxOffset)}] for a query of length ${String(queryLength)}`
     );
     this.name = 'InvalidSearchOffsetError';
     this.offset = offset;
