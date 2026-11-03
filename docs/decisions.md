@@ -976,3 +976,41 @@ to base 36 natively in about 0.1 ms — against the 1.0 to 1.35 ms `getPage` and
 result never reaches the cache is the **client's** to enforce, by not calling `setPage` or `setTitle`
 for a cancelled request id: this module holds no opinion about request ids, which is why the rule
 cannot live here.
+
+---
+
+## ADR-0020 — A non-canonical fragment is reported, not refused
+
+**Decision.** `fragmentToAddress` resolves a fragment that is well-formed but not canonical, and
+reports it: `ParsedFragment` carries `hasCanonicalRoomName`, a whole-fragment `isCanonical`, and the
+`canonicalFragment` the router rewrites to on load. A non-canonical room name, leading zeros on a
+numeric component, a `?` with nothing after it and parameters in another order all resolve with
+`isCanonical: false` rather than throwing.
+
+**Why.** ADR-0009 settled this for the room name — lenient parsing so a hand-edited or truncated
+link lands somewhere sensible, canonical rendering so that a link _is_ the page, and a rewrite on
+load — and the fragment is the same tension one level up. The codec extends the split to the whole
+fragment rather than inventing a second policy for the parts ADR-0009 did not cover, which would
+leave a URL that is bijective in its room name and many-to-one in its page number.
+
+`canonicalFragment` is computed by **re-serialising the parsed address**, not by a second set of
+normalisation rules. One canonical form, produced by the one function that produces canonical forms;
+a separate normaliser would be a second implementation of the scheme to keep in step with the first.
+
+`hasCanonicalRoomName` is kept as a separate, narrower signal rather than folded into `isCanonical`
+because the room name is the segment a human hand-edits and the one that runs to 3197 characters. A
+log saying which segment was rewritten is worth more than one saying only that something was.
+
+**Alternatives rejected.**
+
+- _Refuse a non-canonical name._ Contradicts SPEC §3 outright, and turns a stray keystroke into an
+  error page for no gain — ADR-0009's reason, unchanged.
+- _Normalise silently, without telling the caller._ The URL in the address bar would then disagree
+  with the address the FSM holds, which is precisely the desynchronisation architecture §4 exists to
+  prevent. The caller cannot rewrite what it is not told about.
+- _One `isCanonical` flag and nothing finer._ Cheaper, and it loses the only part of the answer that
+  helps a reader diagnose a link: which of 3223 characters was wrong.
+
+**Consequence.** M8's router must rewrite the URL after parsing rather than merely accepting it —
+ADR-0009's consequence, now with the string to rewrite _to_ supplied by the parse rather than
+recomputed at the call site.
