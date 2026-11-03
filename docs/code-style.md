@@ -18,7 +18,7 @@ source file is a review blocker. The only Cyrillic in the repository is the alph
   "noUncheckedIndexedAccess": true,
   "exactOptionalPropertyTypes": true,
   "noImplicitOverride": true,
-  "noFallthroughCasesInSwitch": true
+  "noFallthroughCasesInSwitch": true,
 }
 ```
 
@@ -103,11 +103,11 @@ Versions are pinned by the lockfile, and the lockfile is committed.
 
 ## 8. What is automated
 
-| Tool | Scope |
-|---|---|
-| ESLint + Prettier | style, layer import rules |
-| `tsc --noEmit` | types |
-| Vitest + fast-check | behaviour and properties |
+| Tool                | Scope                     |
+| ------------------- | ------------------------- |
+| ESLint + Prettier   | style, layer import rules |
+| `tsc --noEmit`      | types                     |
+| Vitest + fast-check | behaviour and properties  |
 
 All of them are required CI stages. Pre-commit hooks are a convenience; **CI is the authority**, and
 anything CI has not verified counts as unverified.
