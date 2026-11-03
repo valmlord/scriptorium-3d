@@ -1014,3 +1014,45 @@ log saying which segment was rewritten is worth more than one saying only that s
 **Consequence.** M8's router must rewrite the URL after parsing rather than merely accepting it —
 ADR-0009's consequence, now with the string to rewrite _to_ supplied by the parse rather than
 recomputed at the call site.
+
+---
+
+## ADR-0021 — The URL codec's error classes are flat, with no shared base
+
+**Decision.** `src/app/errors.ts` declares nine independent error classes —
+`UrlPrefixError`, `UnknownFormatVersionError`, `UrlSegmentCountError`, `UrlSegmentLabelError`,
+`NonNumericComponentError`, `UnknownLanguageError`, `UnknownUrlParameterError`,
+`DuplicateUrlParameterError`, `UndecodableParameterError` — with no common base class, and `core`'s
+errors pass through the codec unwrapped.
+
+**Why.** A base class here would catch only part of what the codec throws while looking as though it
+caught all of it. Parsing a fragment also surfaces `InvalidAddressError`, `AddressBeyondLibraryError`
+and `UnknownSymbolError` from `core`, and those cannot extend an app-layer base: `core` imports
+nothing (architecture §1). So `catch (e) { if (e instanceof UrlError) … }` would be a plausible,
+wrong, and silently wrong way to handle a URL — the three refusals it misses are the ones about the
+address itself, which is the half a caller most needs to report.
+
+Wrapping `core`'s errors to restore the hierarchy is the other way to get it, and it is worse: the
+bounds would have to be re-derived in `app/`, where `assertValidAddress` already derives them from
+`WALLS_PER_ROOM`, `SHELVES_PER_WALL`, `BOOKS_PER_SHELF` and `PAGES_PER_BOOK` and already names which
+component crossed which bound. Two homes for one number (ADR-0013), and the second one further from
+the SPEC.
+
+What replaces the base class is a **table**: the module doc comment lists every input shape against
+the error it produces, in one place, next to the code that produces it. That is the thing a caller
+actually needs — not a type to catch, but the list of what can go wrong.
+
+**Alternatives rejected.**
+
+- _A `UrlError` base for the app-layer nine._ Covers nine of twelve refusals and reads as though it
+  covers twelve.
+- _Wrap `core`'s three in app-layer types._ Re-derives bounds that `core` owns, to buy a hierarchy
+  that is only wanted because it was assumed.
+- _One error type with a discriminant field._ Loses `instanceof`, and makes the refusal a value to
+  switch on rather than a type the compiler can narrow — which is the shape code-style §4 rejects
+  when it says a domain situation gets a dedicated type.
+
+**Consequence.** A caller handling URL failures enumerates what it cares about rather than catching
+a base, and the doc-comment table is load-bearing documentation: it is the only complete statement of
+the codec's failure surface, so a new refusal is added there in the same change or the surface is
+silently understated.
