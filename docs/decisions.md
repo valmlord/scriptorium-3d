@@ -1446,3 +1446,67 @@ every search — 1.05 ms on ADR-0005's Intel runner, 1.41 to 1.44 ms on its AMD 
 tenth of a frame, once per query, and it is paid on the worker thread rather than the main one.
 `locate` is therefore also the one call whose `GenerationRequest.ids` is never empty (ADR-0025): there
 is no cache for it to hit.
+
+---
+
+## ADR-0027 — The worker's own messages are narrowed at the boundary too
+
+**Decision.** `response.ts` narrows a payload posted **by the worker** from `unknown` before the client
+acts on it, exactly as `handler.ts` narrows a payload posted by the client. Every member of the
+narrowed `IncomingResponse` is a `Pick` of the protocol's own interface rather than a shape written out
+again, and the two directions keep their own guards rather than sharing a module.
+
+**Why.** code-style §1 says data crossing a boundary is untrusted and validated at runtime, and it does
+not care which way the message travels. "The worker is our own code" is a promise to the compiler, and
+**the compiler is not what delivers the message.** One concrete way the two ends disagree without
+anybody making a mistake: a stale worker bundle served from an HTTP cache after a format change. A
+`page` response whose `text` is `undefined` would then be admitted to the cache as a page and rendered
+as the string `"undefined"` — nothing throws, nothing is red, and a reader is shown text that is not in
+the library. That is ADR-0003's failure mode reached through the wire instead of through a constant.
+
+**`Pick` rather than a restated shape** is what makes the module hold itself to the format: a renamed
+field or an added response kind stops `response.ts` type-checking instead of being silently dropped on
+arrival. The protocol's interfaces stay the single home of the wire format, which is ADR-0013's rule
+applied to a type rather than to a number.
+
+**An id is reported on failure whenever one could be read**, for the same reason `handler.ts` reports
+it: a malformed message under a sound id still names a promise the client is holding, and leaving it
+unnamed is the hang ADR-0016 exists to prevent. `null` means the message cannot be attributed to
+anything, and then there is genuinely nothing to settle. This is what closes the gap between "every
+message is answered exactly once" on the wire and "every request settles" on the main thread.
+
+**The guards are this module's own.** `handler.ts`'s equivalents are private, deliberately: the two
+directions of the format are reviewed separately and a shared guard module would couple them through
+something that owns neither. The duplication is four predicates of one line each, which is a smaller
+cost than a third module both directions have to agree with.
+
+**Alternatives rejected.**
+
+- _Trust the worker, because it is our own code._ The argument above: a promise to the compiler, which
+  is not the transport. And the stale-bundle case needs nobody to have been careless.
+- _`as` on arrival._ code-style §1 makes an assertion a red flag needing justification, and here the
+  justification would be the very thing the boundary exists to check.
+- _A shared guard module for both directions of the wire._ Couples the two halves of the format through
+  a third module that owns neither, to save four one-line predicates.
+- _A schema validation library._ code-style §7: twenty lines of your own code often beat a package with
+  six transitive dependencies, and the shape is already written down once, as the protocol's
+  interfaces, which a schema would be a second copy of.
+- _Narrowing only the fields the client happens to read today, written out by hand._ That is what
+  `Pick` does, except `Pick` fails to compile when the protocol moves and a hand-written shape does
+  not.
+
+**Consequence.** Every response kind either resolves or rejects a promise, the malformed included, so
+the "every request settles" rule of ADR-0016 holds across the boundary and not merely up to it. Adding
+a response kind means extending `IncomingResponse` and its guard in the same change, or the module does
+not type-check.
+
+**Open: the worker _scope_ is narrowed on the platform's word rather than on a measurement.**
+`entry.ts` narrows `globalThis` structurally for the two members a worker scope must offer, rather than
+taking the `WebWorker` lib — which redeclares much of `DOM` and would make every other module compile
+against a scope it does not run in. The integration harness installs those two members over Node's
+`parentPort` and then imports the real `entry.ts`, so the production module is what runs; what is
+_assumed_ is that a browser's `DedicatedWorkerGlobalScope` offers the same two. That is the platform's
+specification and not a measurement, and a browser `Worker` is not reachable from the `node`
+environment this suite runs in. The Playwright suite exercises it once there is a page that loads the
+worker (testing.md §6), which is M4/M5. Until then it is the one claim in this layer resting on a
+specification rather than on a test.
