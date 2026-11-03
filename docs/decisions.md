@@ -532,6 +532,19 @@ pull request gate, and that reason was always sufficient on its own.
 Issue #6 stays open, with its premise corrected: what remains to establish is the residual 0.2
 points and where `break` should sit now that it is defending against that rather than against six.
 
+**Correction, 2026-11-03: the `coverageAnalysis: "all"` rejection rested on a false baseline.**
+The alternative above is rejected on the grounds that `"all"` "runs every test against every
+mutant", where "the current run already reaches 59 minutes with attribution narrowing the work".
+Attribution was narrowing nothing. `coverageAnalysis: "perTest"` was collecting no coverage at all
+under the runner version of the day, so the committed configuration was **already** running every
+test against every mutant, and `"all"` would have cost no wall clock whatever — it would merely
+have made the behaviour honest about itself. ADR-0017 has the mechanism and the figures.
+
+The conclusion survives and the reason now holds for the first time: under 9.6.1 attribution really
+does narrow the work, by a factor of five on that record's measurement, so `"all"` would today cost
+the hour this record wrongly believed it was already paying. The run-length reason this record
+stands on is unaffected either way, since it never depended on which alternative was cheaper.
+
 ---
 
 ## ADR-0015 — Formatting and shell are CI stages, not hook conveniences
@@ -633,3 +646,85 @@ races the reply, and the honest implementation assumes the reply is already in f
 
 **Consequence.** M3's "Cancellation asserted by outcome" is answerable without a timer, and the
 frame budget that gates the milestone is measured against a client that releases what it cancels.
+
+---
+
+## ADR-0017 — Stryker 9.6.1, because `perTest` was collecting nothing
+
+**Decision.** `@stryker-mutator/core` and `@stryker-mutator/vitest-runner` are pinned at **9.6.1**,
+the first release whose injected Vitest setup file reads the suite from the argument Vitest 4.1
+actually passes it. `coverageAnalysis: "perTest"` has been in `stryker.config.json` since the tool
+arrived and had never collected a byte.
+
+**Why.** The configuration said `perTest`; the planner ran **every test against every mutant**, and
+a full run cost forty-eight minutes for work that takes ten. The chain from the one wrong argument
+to the hour is mechanical, and worth writing out because every link in it is silent:
+
+- 9.2.0's runner records coverage in `afterAll((suite) => { suite.meta.mutantCoverage = ns.mutantCoverage; })`,
+  which takes the suite as its **first** argument. Vitest 4.1 moved the suite to the **second**, so
+  `suite` binds to the test context and `suite.meta` is not the file meta `ctx.state.getFiles()`
+  later reads.
+- `readMutantCoverage()` therefore ends in `return coverages[0]` over an empty array — `undefined`.
+- The `undefined` is dropped crossing the test-runner child-process boundary, so the dry-run result
+  reaches Stryker core with **no `mutantCoverage` key at all** rather than with an empty one.
+- `TestCoverage.hasCoverage` is `!!staticCoverage`, hence `false`.
+- `mutant-test-planner.js` then takes its last branch — _"No coverage information exists, all tests
+  need to run"_ — for every mutant in the project.
+
+**Nothing warns at any step.** The runner's peer range is `vitest: ">=2.0.0"` and 4.1.11 satisfies
+it, so the install is clean; the harness starts, instruments, runs a green suite and prints a
+plausible score. This is the same shape as `_comment_timeout` and the budget written beside a
+`bench` task — configuration that reads as a control and reaches nothing — except that here the
+config was correct and the tool below it was not, which is the variant no amount of reading the
+repository would have caught.
+
+**The measurement.** Same machine, same commit, same `stryker.config.json`, Vitest unchanged at
+4.1.11. Taken in a clone outside the working tree so the run could not disturb the working copy or
+the CI runs it was being compared against; scores read from the `clear-text` table Stryker prints,
+not parsed out of the HTML report.
+
+|                             | 9.2.0         | 9.6.1         |
+| --------------------------- | ------------- | ------------- |
+| **duration**                | **47m52s**    | **9m43s**     |
+| tests per mutant            | 96.14         | **7.07**      |
+| mutants with `coveredBy`    | **0 / 614**   | **610 / 614** |
+| flagged `static`            | 0             | 125           |
+| score                       | 93.77         | 93.77         |
+| killed / timeout / survived | 546 / 26 / 38 | 541 / 31 / 38 |
+
+The four mutants without `coveredBy` under 9.6.1 are exactly the four `Ignored` ones, the deliberate
+`// Stryker disable next-line` exclusions at `library.ts:252` and `prf.ts:89`.
+
+**The verdict does not move, which is what makes the upgrade safe to take.** Paired on mutant id
+across all 614, the only changes are score-neutral: 10 `Timeout → Killed` and 15
+`Killed → Timeout`. The 38 survivors are the same 38 mutants. Pairing on _position_ instead — file,
+line, column, mutator, replacement — collapses the 614 into 602 distinct keys, 12 collisions, and
+miscounts silently; the comparison was keyed on mutant id for that reason.
+
+Three signals distinguish a working run from the old one, and are worth checking rather than
+assuming after any future bump of either package: `Ran ~7 tests per mutant on average` in the
+console summary where it read `~96`; the planner's static-mutant warning, which could not appear
+while `hasStaticCoverage` was false for everything; and a non-zero `overhead` in the
+`Initial test run succeeded` line, where it was `0`.
+
+**Alternatives rejected.**
+
+- _9.5.0 through 9.6.0._ Not a partial fix: they carry a _different_ and also-wrong shape,
+  `afterAll(({ meta }) => …)`. 9.6.1 is the first release with the working form, which branches on
+  an `isGreaterThanVitest4Point1` flag. Verified by reading each published tarball's
+  `stryker-setup.js` rather than the changelog.
+- _10.1.1._ Carries the fix as well. 9.6.1 is the first and the smaller move, with no
+  major-version configuration migration to absorb at the same time as a behavioural change this
+  large.
+- _Upgrading one package._ `@stryker-mutator/vitest-runner@9.6.1` pins `@stryker-mutator/core` to
+  exactly `9.6.1` in its peers, so they cannot move independently. Taken together the install needs
+  neither `--force` nor `--legacy-peer-deps`.
+- _`ignoreStatic: true`, or `coverageAnalysis: "all"`, as #6 proposed._ Both were measured against
+  the broken state, where `hasCoverage` was false for every mutant and neither option's branch in
+  the planner was reachable. Every reading of them was a reading of something else; see ADR-0023 for
+  what `ignoreStatic` costs now that it has an effect.
+
+**Consequence.** No runtime dependency changes — both packages are `devDependencies`, and the
+lockfile churn is confined to the runner's own dev tree. The score is unchanged at 93.77, so the
+nightly gate of ADR-0014 could not regress across the upgrade, and the thresholds that gate rests on
+became measurable for the first time, which is ADR-0018.
