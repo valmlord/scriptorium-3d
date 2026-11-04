@@ -11,9 +11,20 @@ import { resolve } from 'path';
 // These rules are type-aware, so the first lint builds a TypeScript program for
 // the whole project — seconds, not milliseconds. Under coverage instrumentation
 // that overran the 5 s default and failed the coverage job while `verify`, which
-// runs the same tests uninstrumented, stayed green. The budget is raised here
-// deliberately rather than left to chance.
-vi.setConfig({ testTimeout: 20_000, hookTimeout: 60_000 });
+// runs the same tests uninstrumented, stayed green.
+//
+// The `beforeAll` below is the heaviest hook in the repository, and the one
+// `vite.config.ts` calibrated its own `hookTimeout` on: its worst observation
+// there is 9.3 s under coverage (ADR-0028, which has the runs). 60 s is 6.4x
+// that against the config's 5.4x, and the extra margin is what this line is
+// for — the one hook whose cost is a whole TypeScript program keeps a ceiling
+// of its own.
+//
+// The per-test `testTimeout: 20_000` that stood here is gone: the twenty tests
+// in this file sum to about 1.2 s under coverage and none of them reached the
+// slowest thirty of any run, so against the config's chosen 25 s this line was
+// no longer raising a ceiling — it was quietly lowering one.
+vi.setConfig({ hookTimeout: 60_000 });
 
 describe('layer boundaries', () => {
   let eslint: ESLint;

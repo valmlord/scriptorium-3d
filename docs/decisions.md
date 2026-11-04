@@ -131,6 +131,29 @@ render 25 digits instead of rendering 3200 and discarding 3175, so a shelf stopp
 costs. The decision above never rested on which of those numbers was right, which is why correcting
 them changes nothing else in this record. Issue #17 has the measurement.
 
+**A fourth machine, slower than all three, measured since.** The table above is three machines and
+does not claim to be every machine, but anything that cites it for "the slowest machine measured" is
+now out of date — `src/worker/loop.ts`'s comment on the 4 ms slice does exactly that. The
+`feat/worker-page-generation` container is an **Intel(R) Xeon(R) Processor @ 2.10GHz, 4 logical cores,
+15.7 GiB, Node v22.23.4 on linux/x64**: medians of 50 warmed samples from the same
+`npm run bench:report` apparatus give `getPage` **2.282 ms**, `getTitle` **1.327 ms**, `locate`
+**2.625 ms** and **a shelf of 32 titles 44.990 ms — 2.70 frames**, with a p99 of 64.077 ms on the
+shelf. Cold: the first `getPage` of the process 12.427 ms, median of the first 15 3.808 ms — again
+about eight times the warm figure, as on all three above.
+
+So the span across the four is a factor of about four on a page and close to three on a title, and the
+argument this record rests on only gets stronger: a shelf that does not fit in a frame on either
+runner does not fit in two and a half on this one. What moves is any arithmetic built on the span.
+ADR-0024's 4 ms slice is three to eight titles on the three machines above and three on this one, and
+that is stated there rather than here.
+
+The same pull request's `generation-cost` job on `ubuntu-latest`
+([run 41684435446](https://github.com/valmlord/scriptorium-3d/actions/runs/41684435446/job/126086319884),
+**AMD EPYC 7763, 4 logical cores, Node v22.23.4, image ubuntu24**) reported `getPage` 1.377 ms,
+`getTitle` 1.004 ms and a shelf of 34.194 ms, with a cold first `getPage` of 11.934 ms. That is 0.8 ms
+above this record's AMD upper bound on a shelf, inside the 2.6% spread it reports across four runs on
+the same model, so the AMD column stands as measured.
+
 **Consequence.** The core stays synchronous and pure; asynchrony exists only at the worker boundary.
 
 ---
@@ -392,6 +415,17 @@ the runner's own ~8x. `vitest.stryker.config.ts` now sets `testTimeout: 30_000`,
 per-mutant deadline (`timeoutMS` 15 s plus `timeoutFactor` 2 x the dry-run time, about 29 s) so that
 slow mutants are still Stryker's to kill and only the dry run's ceiling moves. Verified by setting
 it to 50 ms and watching the dry run fail with the CI error verbatim.
+
+**And a fourth, left inherited by this record for ten decisions.** The paragraph above names Vitest's
+5 s `testTimeout` as a budget nobody chose, and then raises it on exactly one of the three rows of the
+table at the top of this record — the mutation run, which is where it had already produced a visible
+failure. `npm run test` and `npm run coverage`, the other two rows, read `vite.config.ts`, which set no
+`testTimeout` at all and so kept the default this record had just finished calling arbitrary. The suite
+then grew into it: five property tests failed on timeouts alone on a contended machine, and on
+`ubuntu-latest` the slowest test in the suite reaches 24.0 s under coverage. ADR-0028 chooses both that
+ceiling and the per-hook one, on figures measured there. Nothing above changes — the case count, the
+budget's absence under instrumentation and the Stryker ceiling are all as recorded — except that the
+"third budget" was two, and the second one was the one every pull request runs.
 
 **Consequence.** `vite.config.ts` and `vitest.stryker.config.ts` each pass a flag down through
 `test.env`, because the v8 provider instruments through an inspector session that leaves no trace
@@ -1205,3 +1239,460 @@ to Stryker is whether the hybrid case deserves its own option. Recorded rather t
 the workaround costs nothing a reader is not already told to do, and because patching the planner
 locally would make this project's score incomparable with its own history. Issues #6 and #25 carry
 the six named mutants.
+
+---
+
+## ADR-0024 — The worker yields between requests, and a drain begins with a yield and never ends with one
+
+**Decision.** The worker's message loop takes delivery of messages and computing them separately.
+`accept` answers a payload claiming to be a `cancel` **on arrival** and queues everything else, which
+is O(1). The drain **hands the event loop back before computing anything**, then answers the queue in
+order, yielding again once `REQUEST_SLICE_MS` — **4 ms** — of compute has gone by, and **never
+yielding into an empty queue**. The yield is a `MessageChannel` round trip.
+
+**Why.** The naive loop is `onmessage = (event) => post(handle(event.data))`. It passes every test the
+handler has and the feature it implements does nothing. Fan a shelf out and 32 request messages are
+queued as 32 tasks; the worker runs them back to back, about a millisecond apiece; the `cancel` the
+client posts 5 ms later is queued **behind** the 27 requests it was trying to prevent and is read
+about 27 ms after the last title it could have saved. Every title is computed. The handler then
+answers each cancel `reply-in-flight`, truthfully, and the client correctly discards 27 results it
+paid for in full. Nothing is red, and cancellation is decorative — which is this repository's
+recurring defect in a new place: a mechanism that is configured, tested and reaches nothing.
+
+The leading yield is what makes the queue worth having, and leaving it out is the subtle way to
+rebuild the naive loop out of the right parts. Without it the first `accept` drains the single
+message it just queued, synchronously, inside its own task — so the queue holds at most one request,
+the other 31 are still in the event loop's queue, and the cancel is the 33rd task behind them exactly
+as before. **A queue only overtakes work that is actually in it.**
+
+Which is also why what `protocol.ts` calls a channel that overtakes the queue is one queue and one
+`postMessage` rather than a second `MessagePort`. Both ports' deliveries land in the same task queue
+in arrival order, so a cancel posted after 32 requests is the 33rd task either way. What makes it
+overtake is that by then the work is no longer in the queue it has to overtake.
+
+**Why the yield is a macrotask, and specifically a message.** `queueMicrotask` and a bare `await`
+drain the microtask queue and return to the same task, so no `message` event is delivered in between
+and a loop yielding that way would read no cancellation at all. Only returning to the event loop lets
+a message in. Among macrotasks it is a `MessageChannel` round trip and not `setTimeout(0)`, because a
+browser clamps nested timers to 4 ms after five levels of nesting and the drain's timers **are**
+nested — each is scheduled from inside the previous one's callback. That would add a 4 ms sleep to
+every 4 ms slice and halve the rate at which a shelf is generated, for no benefit. A message has no
+such clamp.
+
+**Why 4 ms.** It is the one figure in the loop that does not vary with the machine, which is why it is
+the one that is fixed, and both directions have a cost. A slice of 1 ms would check for cancellation
+between every title and spend a few percent of the thread doing it; a slice of 32 ms would be the
+naive loop with extra steps, reading a cancel only once a shelf had finished. A title costs 0.46 ms
+on the fastest machine on record and 0.98 ms on the slowest of ADR-0005's three, so a 4 ms slice is
+three to eight titles there — and 1.33 ms on the fourth machine now recorded in ADR-0005, where it is
+three. The cost of a yield is a task-queue turn, microseconds, so a slice three to eight requests long
+spends well under 1% of the thread on yielding. It is a clock and not a counter because the budget is
+4 ms of **compute**, and how many requests fit in 4 ms is exactly what varies by a factor of three
+across the machines in that record.
+
+**The measurement.** 32 title requests to the worker through a real `node:worker_threads` thread, with
+the cancels for the second half posted when the first answer comes back — the timing a camera has,
+about 28 ms of work still queued. A `dropped` response can only be produced for a request refused
+_before_ `core` was called, so the disposition is what discriminates rather than the count of
+rejections. On the container named in the pull request, an **Intel(R) Xeon(R) Processor @ 2.10GHz, 4
+logical cores, 15.7 GiB, Node v22.23.4 on linux/x64** (ADR-0013):
+
+| drain                 | titles computed | dropped | dispositions           |
+| --------------------- | --------------: | ------: | ---------------------- |
+| as written            |          **16** |  **16** | 16 × `pre-emptive`     |
+| slice yield removed   |              32 |       0 | 16 × `reply-in-flight` |
+| leading yield removed |              32 |       0 | 16 × `reply-in-flight` |
+| both removed          |              32 |       0 | 16 × `reply-in-flight` |
+
+So abandoning a shelf half way through abandons half the work, and without a yield it abandons none of
+it **while reporting the cancellation truthfully** — the decorative-feature failure, reproduced rather
+than argued.
+
+**Why the drain never yields into an empty queue, which was found by measuring rather than by
+reasoning.** With only the _leading_ yield removed the loop first measured as unchanged: 16 and 16.
+The cause was the drain's trailing yield into an already empty queue, which let the queue fill one
+request late and papered over the missing leading yield. Pinned by a fourth variant — no leading yield
+**and** no yield into an empty queue → **32 computed, 0 dropped** — while keeping the leading yield and
+dropping the trailing one stays at 16 and 16. The drain was changed to never yield into an empty queue,
+which is one macrotask cheaper and makes the leading yield load-bearing and detectable; the table above
+is after that change. A guard that is red in only one of the two places it should be is a guard partly
+reporting a safety it does not have.
+
+**Alternatives rejected.**
+
+- _A second `MessagePort` for cancels._ Overtakes nothing: both ports deliver into the same task queue
+  in arrival order. Covered above, and it is the alternative `protocol.ts`'s wording invites.
+- _`queueMicrotask`, or a bare `await`, as the yield._ Never leaves the task, so no message is
+  delivered and the naive loop's behaviour is unchanged.
+- _`setTimeout(0)`._ Clamped to 4 ms once nested, which doubles a slice.
+- _Counting requests instead of milliseconds for the slice._ A budget that varies by a factor of three
+  across the machines in ADR-0005, which is the thing ADR-0013 forbids.
+- _A module-level `MessageChannel` singleton instead of one per yield._ One allocation instead of about
+  eight per shelf, against 25 to 33 ms of `bigint` arithmetic — not measurable — and an open port with
+  a listener keeps its host's event loop referenced, which is a test process that never exits.
+
+**Consequence.** One extra task-queue turn before a burst is answered — microseconds against the 1.0 to
+1.35 ms of the first page in it (ADR-0005) — and one more per slice. In exchange a shelf abandoned
+after 5 ms stops after about 5 ms of compute instead of running all 32 titles to completion, which is
+what makes ADR-0016's rejection worth issuing. `WorkerLoop.whenIdle` is the worker-side half of the
+`waitForIdle()` that testing.md §7 specifies so that no end-to-end test ever sleeps on a duration; the
+main-thread half is ADR-0025's.
+
+**Open: none of this closes M3's frame gate, and it cannot be closed here.** The gate reads "generating
+32 shelf titles drops no frame", and "drops no frame" is a statement about a render loop: `engine/` is a
+stub, there is no `setAnimationLoop`, no `window.__scriptorium` hook and no scripted camera flight. What
+was measured instead is a 60 fps timer on an otherwise idle main thread while 25 shelves are generated —
+a 16.17 ms median, an 18.13 to 20.20 ms maximum, no frame over 32 ms in 365 frames across four runs, and
+0.0 to 1.1% over 20 ms, against 96.2% of frames over 32 ms for the same work inline. The main thread's
+own share of a shelf is 0.75 to 0.95 ms, which is the figure that could have sunk this: architecture §2
+puts anything above ~1 ms on the worker, and the fan-out plus 32 response handlers sits just under it.
+The assertion that closes the gate is the one testing.md §5 already specifies, through the debug hook,
+and it belongs to M4/M5. No threshold is added anywhere from the figures above, for ADR-0013's reason.
+
+---
+
+## ADR-0025 — A generation call returns a cancellable handle, not a promise
+
+**Decision.** Every `GenerationClient` call returns a `GenerationRequest<T>` — `ids`, `result`,
+`cancel()` — rather than a bare promise, and rather than taking an `AbortSignal` the caller owns.
+`cancel()` is idempotent and a no-op once the call has settled. Request ids are monotonic integers
+owned by the client, never a timestamp and never random (architecture §5).
+
+**Why.** ADR-0016 settled that a cancelled request **rejects** rather than hanging, and deferred the
+`AbortSignal` because it moves the bookkeeping into `ui/` for a single call site. This record is the
+other half of that: what was built instead, and why the handle carries what it carries.
+
+**A handle rather than a plain promise, because cancellation names ids and not addresses.** The same
+address may be in flight under two ids while a camera passes a shelf twice (`protocol.ts`), so
+"cancel the request for this address" is not a well-formed instruction — it names either both or
+neither, and which one the caller meant is information only the caller has. A handle is that
+information, held by the one object that has it.
+
+**`ids` is the set actually issued, which is not always one and not always more than zero.** A shelf
+issues up to `BOOKS_PER_SHELF` of them; a call served entirely from the cache issues none and never
+touches the worker, because ADR-0019 puts the cache in front of the boundary rather than behind it. A
+caller never has to branch on which happened — `cancel()` is meaningful either way — and `ids` is
+there for the case that wants to know, such as a test asserting that a hit did not cross the thread.
+
+**The race against the reply is won by one rule: an id leaves the pending table the moment it is
+cancelled.** A reply the worker had already computed then arrives, finds nothing to settle, and
+changes nothing — it is not cached, nothing resolves on it, and **no set of cancelled ids has to be
+kept** in order to recognise it, because ids are monotonic and never reused. That is also why
+`cancel-ack` is a no-op for all three of its dispositions: the client has already done everything the
+acknowledgement could tell it to do. A no-op there is a result of rejecting on the spot, not an
+oversight, and it is worth writing down because it looks like one.
+
+**Admission to the cache happens in a `then` on the request's own promise, not in the response
+handler.** It is the same mechanism seen from the other side: cancellation rejects, so the admission
+never runs. ADR-0019 states that keeping a cancelled result out of the cache is the **client's** to
+enforce, because `cache.ts` holds no opinion about request ids; this is the enforcement, and it is one
+line rather than a check that a future response kind could forget.
+
+The behaviour is measured rather than argued, through a real thread, in ADR-0024's table: 32 titles
+requested, the second half cancelled when the first answer comes back, **16 computed and 16
+`dropped`, all 16 `pre-emptive`**. The dispositions are the part that discriminates — a `dropped`
+response can only be produced for a request refused before `core` was called.
+
+**Alternatives rejected.**
+
+- _An `AbortSignal` the caller owns._ ADR-0016's reason, unchanged: closer to the platform, and worth
+  revisiting when there is a second call site. That is still open there rather than re-decided here.
+- _A bare promise._ Cancelling then has to name an address, which does not identify a request.
+- _A promise that never settles for a cancelled request._ ADR-0016 rejected it: a retained
+  continuation per cancelled request, growing with exactly the camera motion the feature exists for.
+- _Keeping a set of cancelled ids so a late reply can be recognised._ Unnecessary once the id leaves
+  the pending table, and it is the same unbounded growth in a smaller container.
+- _One batch message per shelf instead of 32 single-address requests._ Cheaper on the wire and it
+  cannot express the cancellation of part of itself, which is the normal case — some of a shelf's 32
+  titles have arrived and some are still queued in the worker. Aggregating in the client is what lets
+  a half-cached shelf issue only what it must.
+- _A `locate` cache keyed by the page._ Separate decision, ADR-0026.
+
+**Consequence.** `GenerationClient.pendingCount` is the main-thread half of the `waitForIdle()` that
+testing.md §7 specifies; the worker-side half is `WorkerLoop.whenIdle` (ADR-0024). Cancellation is
+asserted by outcome throughout, per ADR-0016, so no test in this layer waits on a duration — the
+integration test waits on an exact message count instead, which the protocol's one-response-per-message
+rule makes exact.
+
+---
+
+## ADR-0026 — A located address is not cached
+
+**Decision.** `locate` results are not cached, and `cache.ts` has no store for them. The cache stays
+the two byte-budgeted stores of ADR-0019 — pages and titles — and `locate` is the one `core` call that
+always crosses the thread boundary.
+
+**Why.** The key would have to be the page. ADR-0019 charges a key against its store's budget, and
+spells out why: an entry costs `(key.length + value.length) * 2`, and a page's key — the base-36
+rendering of its linear index — is as long as the page it names. A `locate` store inverts that
+relation into its extreme case, because here the key **is** the 3200-character page and the value is an
+address object. So an entry is about **6.4 KB of key** to save the **1.0 to 1.4 ms** a `locate` costs
+(ADR-0005). That is the worst ratio of anything the cache could hold, and it is the opposite end of the
+same arithmetic that made the title store's keys 99.2% of its ceiling.
+
+And no access pattern asks twice. ADR-0019 derives each ceiling from the pattern that revisits that
+store's contents — page-at-a-time inside a volume, and the camera turning inside a room. There is no
+such pattern here: **a search query is typed once, and the address it resolves to is what the
+navigation state then holds** (architecture §4), so the second lookup of a given page does not happen.
+A cache with no re-reads is a byte budget spent on nothing.
+
+**Alternatives rejected.**
+
+- _A third store keyed by the page._ The figures above: the cache's worst key-to-value ratio, buying
+  back a millisecond for a call nothing issues twice.
+- _A third store keyed by a hash of the page._ Replaces 6.4 KB of key with 32 bytes, and pays a
+  SHA-256 over 3200 characters on every lookup to save a `locate` that nothing repeats — and `core`'s
+  `locate` is the Feistel network run backwards, so the hash is a real fraction of what it saves. It
+  also introduces a failure mode this project does not currently have: two distinct pages hashing
+  alike would resolve one page to the other's address, silently, which is exactly the class of wrong
+  that ADR-0008 bought the mutation gate to defend against. Vanishingly unlikely is not the same as
+  structurally impossible, and the trade buys nothing.
+- _Caching the search query rather than the located page._ A short key, but the query is what is typed
+  once; `search` and `locate` are different functions, and the one with a reusable key is not the one
+  being asked about here.
+
+**Consequence.** The budget arithmetic of ADR-0019 covers the whole cache, so there is no third ceiling
+to derive and no third worst-case entry to name. The cost of the inverse direction is paid in full on
+every search — 1.05 ms on ADR-0005's Intel runner, 1.41 to 1.44 ms on its AMD one — which is under a
+tenth of a frame, once per query, and it is paid on the worker thread rather than the main one.
+`locate` is therefore also the one call whose `GenerationRequest.ids` is never empty (ADR-0025): there
+is no cache for it to hit.
+
+---
+
+## ADR-0027 — The worker's own messages are narrowed at the boundary too
+
+**Decision.** `response.ts` narrows a payload posted **by the worker** from `unknown` before the client
+acts on it, exactly as `handler.ts` narrows a payload posted by the client. Every member of the
+narrowed `IncomingResponse` is a `Pick` of the protocol's own interface rather than a shape written out
+again, and the two directions keep their own guards rather than sharing a module.
+
+**Why.** code-style §1 says data crossing a boundary is untrusted and validated at runtime, and it does
+not care which way the message travels. "The worker is our own code" is a promise to the compiler, and
+**the compiler is not what delivers the message.** One concrete way the two ends disagree without
+anybody making a mistake: a stale worker bundle served from an HTTP cache after a format change. A
+`page` response whose `text` is `undefined` would then be admitted to the cache as a page and rendered
+as the string `"undefined"` — nothing throws, nothing is red, and a reader is shown text that is not in
+the library. That is ADR-0003's failure mode reached through the wire instead of through a constant.
+
+**`Pick` rather than a restated shape** is what makes the module hold itself to the format: a renamed
+field or an added response kind stops `response.ts` type-checking instead of being silently dropped on
+arrival. The protocol's interfaces stay the single home of the wire format, which is ADR-0013's rule
+applied to a type rather than to a number.
+
+**An id is reported on failure whenever one could be read**, for the same reason `handler.ts` reports
+it: a malformed message under a sound id still names a promise the client is holding, and leaving it
+unnamed is the hang ADR-0016 exists to prevent. `null` means the message cannot be attributed to
+anything, and then there is genuinely nothing to settle. This is what closes the gap between "every
+message is answered exactly once" on the wire and "every request settles" on the main thread.
+
+**The guards are this module's own.** `handler.ts`'s equivalents are private, deliberately: the two
+directions of the format are reviewed separately and a shared guard module would couple them through
+something that owns neither. The duplication is four predicates of one line each, which is a smaller
+cost than a third module both directions have to agree with.
+
+**Alternatives rejected.**
+
+- _Trust the worker, because it is our own code._ The argument above: a promise to the compiler, which
+  is not the transport. And the stale-bundle case needs nobody to have been careless.
+- _`as` on arrival._ code-style §1 makes an assertion a red flag needing justification, and here the
+  justification would be the very thing the boundary exists to check.
+- _A shared guard module for both directions of the wire._ Couples the two halves of the format through
+  a third module that owns neither, to save four one-line predicates.
+- _A schema validation library._ code-style §7: twenty lines of your own code often beat a package with
+  six transitive dependencies, and the shape is already written down once, as the protocol's
+  interfaces, which a schema would be a second copy of.
+- _Narrowing only the fields the client happens to read today, written out by hand._ That is what
+  `Pick` does, except `Pick` fails to compile when the protocol moves and a hand-written shape does
+  not.
+
+**Consequence.** Every response kind either resolves or rejects a promise, the malformed included, so
+the "every request settles" rule of ADR-0016 holds across the boundary and not merely up to it. Adding
+a response kind means extending `IncomingResponse` and its guard in the same change, or the module does
+not type-check.
+
+**Open: the worker _scope_ is narrowed on the platform's word rather than on a measurement.**
+`entry.ts` narrows `globalThis` structurally for the two members a worker scope must offer, rather than
+taking the `WebWorker` lib — which redeclares much of `DOM` and would make every other module compile
+against a scope it does not run in. The integration harness installs those two members over Node's
+`parentPort` and then imports the real `entry.ts`, so the production module is what runs; what is
+_assumed_ is that a browser's `DedicatedWorkerGlobalScope` offers the same two. That is the platform's
+specification and not a measurement, and a browser `Worker` is not reachable from the `node`
+environment this suite runs in. The Playwright suite exercises it once there is a page that loads the
+worker (testing.md §6), which is M4/M5. Until then it is the one claim in this layer resting on a
+specification rather than on a test.
+
+---
+
+## ADR-0028 — The suite's per-test and per-hook ceilings are chosen, and calibrated on CI
+
+**Decision.** `vite.config.ts` sets **`testTimeout: 25_000`** and **`hookTimeout: 50_000`**, replacing
+Vitest's 5 s and 10 s defaults. Both are hang guards and neither is a performance gate. Three per-file
+overrides were re-examined against them: `library.test.ts`'s 120 s on five properties stays,
+`layer-boundaries.test.ts` loses its `testTimeout` and keeps its `hookTimeout`, and
+`worker-thread.integration.test.ts` loses both. `src/__tests__/test-budgets.test.ts` asserts that the
+ceiling the runner applies is the one the config declares, and that nothing outside the config lowers
+either one.
+
+**Why.** `vitest.stryker.config.ts` raised `testTimeout` to 30 s with the reasoning written out — "not
+a budget anyone chose, and it decided the mutation job by coin flip" — and ADR-0012 recorded it as a
+third budget found the hard way. It raised the default only on the path where it had already produced a
+visible failure. `vite.config.ts`, which every `npm run test`, every CI `verify` and every
+`npm run coverage` reads, was left on the default, and the suite has grown into it: on a contended
+developer machine five tests failed, all on timeouts and none on an assertion, at 5341 to 7871 ms
+(issue #35). The same suite on the same machine idle passes all 556 in 26.8 s, and CI takes 18.9 s wall
+with 45.4 s of test time. So nothing is broken today; what exists is a gate that decides by how busy
+the machine is, which is what ADR-0013 was written about.
+
+It is also not the sort of thing a reviewer can see. A test that times out **fails**, so under an
+unchosen ceiling a slow test and a wrong one are the same red, and ADR-0014's correction is what that
+costs: a 5 s cap was killing mutants on the clock rather than on an assertion and inflating the
+mutation score by five points.
+
+**What this is not.** The wall-clock budget is testing.md §5's, asserted in
+`src/core/__tests__/performance.test.ts` against a committed baseline and enforced by `verify`
+uninstrumented on every push (ADR-0013, ADR-0012). Nothing here is what notices the library getting
+slower, and raising a timeout cannot hide a slowdown, because the budget that would catch one is a
+separate assertion in a separate file. Conversely a timeout is useless as a performance gate: it fires
+on the machine being busy, which is the property ADR-0013 removed from the budget.
+
+**The measurement.** Taken on `ubuntu-latest`, because that is the machine that enforces this
+(ADR-0013) and it is also where the slower of the two consumers runs. A throwaway reporter printing
+each test's `onTestCaseResult` duration and each module's `onTestModuleEnd` diagnostics — a module's
+residual, its own duration less the sum of its tests', is what a `beforeAll` costs — pushed on a scratch
+branch so that both commands could be timed on real runners. **Eighteen runs**: twelve of
+`npm run test` and six of `npm run coverage`, over three CPU models, Node v22.23.4, images
+ubuntu24/20261026.354.1 and ubuntu24/20261101.360.1. Runs
+[41688546201](https://github.com/valmlord/scriptorium-3d/actions/runs/41688546201) and
+[41689066798](https://github.com/valmlord/scriptorium-3d/actions/runs/41689066798), on the scratch
+branch `chore/infra-test-duration-probe`. **Both runs are red overall and the figures are still
+sound**: the reporter is a loose `.mjs` at the repository root, so `format` and `verify` failed on it
+while the duration jobs — which are what the numbers come from, and which run the suite unmodified —
+passed. The branch is not merged and can be deleted once these figures are read.
+
+| mode               | machine            | runs | slowest test in the suite | slowest test this ceiling governs |      heaviest hook |
+| ------------------ | ------------------ | ---: | ------------------------: | --------------------------------: | -----------------: |
+| `npm run test`     | Intel Xeon 6973P-C |    3 |            4137 – 4483 ms |                    1624 – 1864 ms |     2108 – 2320 ms |
+| `npm run test`     | AMD EPYC 7763      |    7 |            5457 – 5866 ms |                    2211 – 2927 ms |     3298 – 3590 ms |
+| `npm run test`     | AMD EPYC 9V45      |    2 |            3176 – 3401 ms |                    1232 – 1399 ms |     2230 – 2328 ms |
+| `npm run coverage` | AMD EPYC 7763      |    4 |        23 652 – 24 007 ms |                3905 – **4318** ms | 7572 – **9328** ms |
+| `npm run coverage` | AMD EPYC 9V45      |    2 |        12 619 – 12 671 ms |                    2244 – 2319 ms |     4371 – 4858 ms |
+
+The two columns differ because five properties in `library.test.ts` already carry their own 120 s — so
+the suite's slowest tests are not the ones the configured ceiling decides. **It is the governed column
+that calibrates `testTimeout`**, and the ungoverned one that settles whether those five overrides can
+go. The heaviest hook is the `beforeAll` in `layer-boundaries.test.ts`, which builds a type-aware
+TypeScript program for the whole project; it is the only hook in the suite that costs anything, and it
+is governed by that file's own `hookTimeout`.
+
+Three things the figures say that reading the repository does not. `ubuntu-latest` draws more than one
+machine, and on a page the three models here span a factor of 1.8 on the same test — so a figure taken
+from one of them is not a figure about CI. Coverage instrumentation costs between 1.6x and 4.2x, so the
+`coverage` job and not `verify` is the binding case, and `coverage` is also the run where the wall-clock
+budget is deliberately not asserted (ADR-0012). And the suite's slowest test reaches **24.0 s** — Vitest's
+default is not merely unchosen, it is five times under what the suite already does.
+
+**Why 25 s.** A threshold is really a statement about how much slower than the worst observation a run
+may be before it is called a hang:
+
+| `testTimeout`  | vs. the 4318 ms worst governed observation | what it means                                                                                         |
+| -------------- | -----------------------------------------: | ----------------------------------------------------------------------------------------------------- |
+| 5 s, inherited |                                  **1.16x** | already crossed: five tests at 5341 to 7871 ms on a contended machine (#35)                           |
+| 10 s           |                                      2.32x | 27% above the worst contended observation on record. The ADR-0013 mistake with a wider number         |
+| **25 s**       |                                  **5.79x** | one hang costs 25 s against an 18.9 s suite                                                           |
+| 30 s           |                                      6.95x | `vitest.stryker.config.ts`'s figure, derived from Stryker's own deadline and not from these durations |
+| 120 s          |                                     27.79x | `library.test.ts`'s figure. One hang costs six times the whole job                                    |
+
+Five times the slowest observation is the margin ADR-0013 settled on for the performance budget, and for
+the same reason: what is being guarded against is unbounded — a promise that never settles, a loop that
+never exits, a thread that never replies — so margin costs no detection power at all, where a ceiling
+sitting a few percent above the enforcing machine's own value decides by scheduler luck. The other
+direction has a cost too, and it is the one a looser figure ignores: a ceiling is how long CI waits for
+a hang. At 25 s a hung test roughly doubles the job, which is cheap and visible; at 120 s it is six jobs.
+
+**Why 50 s for hooks, and what it honestly governs.** 5.4x the 9328 ms worst hook observation, by the
+same arithmetic. **It governs no hook that exists**, and that is worth stating rather than leaving for
+a reader to discover: the only two files with hooks both set their own, so the global reaches nothing
+today. It is set because the next file that adds a hook would otherwise inherit a figure nobody chose —
+and the figure nobody chose had already been reached. Vitest's default is 10 s, and the heaviest hook on
+record is 9328 ms: **within 7% of it**, under a setting that has never been examined. That it reaches a
+hook at all was verified rather than assumed, by removing `layer-boundaries.test.ts`'s own override and
+setting the global to 50 ms: `Hook timed out in 50ms`, with that file's 20 tests skipped.
+
+**The per-file overrides, re-examined.** Three existed. One was load-bearing, one had inverted, one had
+never enforced anything:
+
+| file                                                     | before                                      | after                 | why                                                                              |
+| -------------------------------------------------------- | ------------------------------------------- | --------------------- | -------------------------------------------------------------------------------- |
+| `src/core/__tests__/library.test.ts`                     | `PROPERTY_TIMEOUT_MS = 120_000`, five tests | unchanged             | those five reach 24.0 s under coverage; 25 s would be 1.04x an observed value    |
+| `src/__tests__/layer-boundaries.test.ts`                 | `testTimeout: 20_000, hookTimeout: 60_000`  | `hookTimeout: 60_000` | the 20 s had stopped raising the ceiling and started lowering it                 |
+| `src/worker/__tests__/worker-thread.integration.test.ts` | `testTimeout: 60_000, hookTimeout: 120_000` | removed               | 41x and 530x this file's own worst observations — 610 ms a test, 94 ms the build |
+
+The middle row is the interesting one and it is this repository's recurring defect arriving by a route
+nobody built: nothing about that file changed, and a line written to **raise** a ceiling became a line
+that **narrows** one, silently, the moment the global passed it. Nothing would have gone red. The
+bottom row is the familiar shape — figures sized against Vitest's default rather than against the
+file, which this file's own measurements put at 610 ms for its slowest test and 45 to 94 ms for the
+Vite build in its `beforeAll`.
+
+**What keeps it honest.** `src/__tests__/test-budgets.test.ts` asserts the per-test ceiling **the runner
+applied to the test doing the asserting**, read from `getCurrentTest()`, against what the config
+declares. Not that the key is present: a key the tool silently discards is present too, which is the
+`_comment_timeout` shape this repository has now removed eleven of. It then scans the suite for budgets
+declared outside the config — `vi.setConfig` calls and `*_TIMEOUT_MS` constants — and asserts each one
+**raises** a ceiling rather than lowering it, which is the `layer-boundaries.test.ts` inversion above
+turned into a red test. The list of the two budgets that exist is asserted exactly, so the scan cannot
+pass by matching nothing: that is ADR-0014's dry run reporting success on 43 of 229 tests, in a smaller
+place. No figure is written in that file; both come from the config, so it cannot become a number's
+second home (ADR-0013).
+
+Both ceilings were watched firing, and the guard was watched going red six ways: the configured
+`testTimeout` at 50 ms turns five of `bignum.test.ts`'s eighteen red with `Test timed out in 50ms`; the
+guard goes red on the `testTimeout` being deleted, on it being set back to 5 s, on the `hookTimeout`
+being deleted, on a per-file `hookTimeout` of 40 s, on the removed `testTimeout: 20_000` being put back,
+and on `PROPERTY_TIMEOUT_MS` dropping to 20 s.
+
+**Alternatives rejected.**
+
+- _Leave the default and let the five contended failures stand._ They are timeouts on property tests
+  that testing.md §2 requires at 1000 cases. A flaky red is fixed or deleted the day it is noticed
+  (testing.md §9), and retrying discards the information the test exists to produce.
+- _10 s._ 2.32x the worst governed observation and 27% above the worst contended one. A gate that close
+  to a measured value is the arrangement ADR-0013 removed after a budget failed one CI run at 5.052 ms
+  and passed the next.
+- _30 s, matching `vitest.stryker.config.ts`._ Reads tidy and is derived from the wrong thing: that
+  figure's lower bound is Stryker's own per-mutant deadline of about 29 s, which has nothing to do with
+  how long this suite's tests take. Two numbers that agree for unrelated reasons invite a future change
+  to move both. Keeping them apart also keeps that override meaningful — it is still a raise, and it
+  stops being one if this ceiling ever passes 29 s, which is now noted there.
+- _One ceiling wide enough for the whole suite, so the five `library.test.ts` overrides could go._ That
+  means 120 s, since those five reach 24.0 s under coverage. It buys tidiness with a hang guard that
+  waits two minutes per test, and 25 s is already 5.79x what it has to cover.
+- _Calibrate on the development machine._ It is not the machine that enforces this (ADR-0013), and it
+  is 1.8x off the runners in both directions depending on which model `ubuntu-latest` draws.
+- _Scale the ceiling by a measured instrumentation factor, so `coverage` and `verify` get different
+  figures._ Invents a number that moves with the runner image and the provider, which ADR-0012 rejected
+  for the budget and ADR-0014 rejected for the runner.
+- _Record the figure in testing.md as well._ The budget of testing.md §5 lives in that document because
+  it is a stated contract about the library's speed. A hang guard is not a contract about anything; its
+  home is the config that applies it and this record. One home (ADR-0013).
+
+**Consequence.** `npm run test` and `npm run coverage` now run on a ceiling derived from what they
+actually do on the machine that enforces it, and a per-file budget that stops raising one goes red
+instead of quietly narrowing it. `vitest.stryker.config.ts` keeps its own 30 s and now overrides a chosen
+25 s rather than an unexamined 5 s; its comment says so, and says what makes it stop being worth having.
+`vite.config.ts` also imports `defineConfig` from `vitest/config` rather than `vite`, because its `test`
+block is Vitest's and Vite's `UserConfig` does not carry it — so that block had been type-checked only
+by accident, in programs that happened to include another file importing `vitest/config`, and reading it
+from a test is what surfaced that.
+
+**Open: nothing in CI reports a test duration, so the next time the suite grows into a ceiling nobody
+will see it either.** The figures above came from a reporter on a scratch branch and are not reproducible
+from `main` once it is gone; six months from now the only way to know whether 25 s is still 5.79x or 1.5x is to take the
+measurement by hand again, which is exactly how the 5 s default survived as long as it did. The guard
+test catches a ceiling that stops being applied, not one that stops being generous. The cheap answer is
+the one `generation-cost` already uses for the benchmark table (ADR-0013): publish the slowest tests to
+the run summary, where GitHub shows them on the run's own page, with no threshold attached — a figure
+nobody can find without opening a log is a figure nobody will find. Whether that earns a job is the
+question, and it is recorded rather than acted on because `verify`'s critical path is held by other jobs
+and adding a step to it would be the easy half of the answer with the reporting half missing.

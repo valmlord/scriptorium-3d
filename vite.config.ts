@@ -1,4 +1,10 @@
-import { defineConfig } from 'vite';
+// `vitest/config` rather than `vite`, because the `test` block below is
+// Vitest's and Vite's own `UserConfig` does not carry it: imported from
+// `vite`, the block type-checks only in programs that happen to include
+// another file importing `vitest/config`, which is how it went unchecked
+// until `src/__tests__/test-budgets.test.ts` read it. Same import as
+// `vitest.stryker.config.ts` already uses.
+import { defineConfig } from 'vitest/config';
 import { getViteConfig } from './vite.aliases.ts';
 
 const aliases = getViteConfig();
@@ -31,6 +37,23 @@ export default defineConfig({
     env: {
       SCRIPTORIUM_COVERAGE: isCollectingCoverage ? '1' : '',
     },
+    // A hang guard, not a performance gate, and chosen rather than inherited
+    // (ADR-0028). Vitest's 5 s default decided the mutation job by coin flip;
+    // `vitest.stryker.config.ts` writes that reasoning out and this does not
+    // repeat it. The wall-clock budget is testing.md section 5's, asserted in
+    // `src/core/__tests__/performance.test.ts` and enforced by CI's `verify`
+    // on every push (ADR-0013), so nothing here is what notices the library
+    // getting slower.
+    //
+    // 25 s is 5.8x the slowest test this setting governs, measured on
+    // `ubuntu-latest` under `npm run coverage` -- the slower of the two CI
+    // jobs that read this config -- at 4318 ms over six runs on two CPU
+    // models. 50 s is 5.4x the slowest hook on record, the `beforeAll` in
+    // `src/__tests__/layer-boundaries.test.ts` at 9328 ms in the same runs,
+    // which had already reached 93% of Vitest's unexamined 10 s default.
+    // ADR-0028 carries the figures and the per-file overrides they settled.
+    testTimeout: 25_000,
+    hookTimeout: 50_000,
     include: ['src/**/*.test.ts', 'src/**/__tests__/**/*.test.ts'],
     setupFiles: ['src/core/__tests__/fast-check-setup.ts'],
     // e2e belongs to Playwright; Vitest must not try to run those specs.
