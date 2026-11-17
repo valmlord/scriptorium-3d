@@ -548,6 +548,117 @@ describe('warm-up', () => {
   });
 });
 
+describe('reporting that nothing is in flight', () => {
+  /** Whether a promise has settled, without waiting on anything. */
+  async function hasSettled(promise: Promise<unknown>): Promise<boolean> {
+    const pending = Symbol('pending');
+    // One turn of the microtask queue is enough: every resolution in this
+    // client is a microtask, so nothing here waits on a duration.
+    return (await Promise.race([promise, Promise.resolve(pending)])) !== pending;
+  }
+
+  it('is quiet before anything has been asked of it', async () => {
+    const client = new GenerationClient(new ScriptedWorker());
+
+    expect(client.isQuiet).toBe(true);
+    expect(await hasSettled(client.whenQuiet())).toBe(true);
+  });
+
+  it('is not quiet while a request is in flight', async () => {
+    const client = new GenerationClient(new ScriptedWorker());
+
+    const request = client.page(FIRST_ADDRESS);
+
+    expect(client.isQuiet).toBe(false);
+    expect(await hasSettled(client.whenQuiet())).toBe(false);
+    expect(request.ids).toHaveLength(1);
+  });
+
+  it('reports quiet once the last reply has arrived', async () => {
+    const worker = new ScriptedWorker();
+    const client = new GenerationClient(worker);
+    const request = client.page(FIRST_ADDRESS);
+    const quiet = client.whenQuiet();
+
+    worker.reply({
+      kind: 'page',
+      id: onlyId(request),
+      text: getPage(FIRST_ADDRESS),
+    });
+
+    await quiet;
+    expect(client.isQuiet).toBe(true);
+  });
+
+  it('waits for the whole of a shelf, not for its first title', async () => {
+    const worker = new ScriptedWorker();
+    const client = new GenerationClient(worker);
+    const shelf = client.shelfTitles(FIRST_SHELF);
+    const quiet = client.whenQuiet();
+
+    for (const [volume, id] of shelf.ids.entries()) {
+      if (volume === BOOKS_PER_SHELF - 1) {
+        break;
+      }
+      worker.reply({ kind: 'title', id, title: getTitle({ ...FIRST_SHELF, volume }) });
+    }
+
+    expect(await hasSettled(quiet)).toBe(false);
+    expect(client.pendingCount).toBe(1);
+  });
+
+  it('reports quiet when a request is cancelled rather than answered', async () => {
+    const client = new GenerationClient(new ScriptedWorker());
+    const request = client.page(FIRST_ADDRESS);
+    const quiet = client.whenQuiet();
+
+    request.cancel();
+
+    await quiet;
+    expect(client.isQuiet).toBe(true);
+    await expect(request.result).rejects.toBeInstanceOf(CancelledRequestError);
+  });
+
+  it('reports quiet when the worker dies with requests in flight', async () => {
+    const worker = new ScriptedWorker();
+    const client = new GenerationClient(worker);
+    const request = client.page(FIRST_ADDRESS);
+    const quiet = client.whenQuiet();
+
+    worker.breakDown();
+
+    await quiet;
+    expect(client.isQuiet).toBe(true);
+    await expect(request.result).rejects.toBeInstanceOf(WorkerFailureError);
+  });
+
+  it('reports quiet when a reply is too malformed to attribute', async () => {
+    const worker = new ScriptedWorker();
+    const client = new GenerationClient(worker);
+    const request = client.page(FIRST_ADDRESS);
+    const quiet = client.whenQuiet();
+
+    worker.reply({ kind: 'page', id: onlyId(request) });
+
+    await quiet;
+    expect(client.isQuiet).toBe(true);
+    await expect(request.result).rejects.toBeInstanceOf(MalformedResponseError);
+  });
+
+  it('becomes busy again after it has been quiet, and reports it', async () => {
+    const worker = new ScriptedWorker();
+    const client = new GenerationClient(worker);
+    const first = client.page(FIRST_ADDRESS);
+    worker.reply({ kind: 'page', id: onlyId(first), text: getPage(FIRST_ADDRESS) });
+    await client.whenQuiet();
+
+    client.page(SECOND_ADDRESS);
+
+    expect(client.isQuiet).toBe(false);
+    expect(await hasSettled(client.whenQuiet())).toBe(false);
+  });
+});
+
 describe('a request the worker refuses or cannot answer', () => {
   it('rejects with GenerationFailedError carrying the name core threw', async () => {
     const client = new GenerationClient(new LoopbackWorker());

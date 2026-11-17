@@ -180,6 +180,13 @@ export class GenerationClient {
   private readonly pending = new Map<RequestId, PendingRequest>();
 
   /**
+   * Who is waiting for `pending` to empty (`whenQuiet`). Released by `forget`,
+   * which is the one place an id leaves the table, so a waiter cannot be left
+   * behind by a settlement path nobody thought of.
+   */
+  private readonly quietWaiters: (() => void)[] = [];
+
+  /**
    * @param worker The worker to own. Its `onmessage` and `onerror` are
    * replaced.
    * @param cache The cache to read through. Injectable so that a caller can
@@ -207,6 +214,35 @@ export class GenerationClient {
   /** How many requests are issued and not yet settled. */
   get pendingCount(): number {
     return this.pending.size;
+  }
+
+  /** Whether nothing at all is in flight. */
+  get isQuiet(): boolean {
+    return this.pending.size === 0;
+  }
+
+  /**
+   * Resolves the next time nothing is in flight.
+   *
+   * This is the half of `waitForIdle()` that belongs to the thread
+   * (`docs/testing.md` §7): the end-to-end suite may not sleep on a duration,
+   * and `pendingCount` alone is a number a test would have to poll. Every
+   * request settles exactly once (see the header), and every settlement goes
+   * through `forget` below, so a table that empties is an event this client
+   * can report rather than a condition anyone has to watch for.
+   *
+   * It says nothing about what the *caller* then does with a result. A page
+   * arriving leaves this client quiet while the reader is still writing it to
+   * the DOM, which is why the hook composes this with the reader's own
+   * idleness instead of taking it for the whole answer (`src/app/idle.ts`).
+   */
+  whenQuiet(): Promise<void> {
+    if (this.isQuiet) {
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      this.quietWaiters.push(resolve);
+    });
   }
 
   /**
@@ -323,7 +359,7 @@ export class GenerationClient {
       if (pending === undefined) {
         continue;
       }
-      this.pending.delete(id);
+      this.forget(id);
       pending.fail(new CancelledRequestError(id, pending.request));
       const cancellation: CancelRequest = { kind: 'cancel', id };
       this.worker.postMessage(cancellation);
@@ -431,7 +467,7 @@ export class GenerationClient {
     if (pending === undefined) {
       return;
     }
-    this.pending.delete(id);
+    this.forget(id);
     switch (response.kind) {
       case 'page':
       case 'title':
@@ -462,6 +498,25 @@ export class GenerationClient {
     }
   }
 
+  /**
+   * Drop `id` from the table, which is what "settled" means here, and release
+   * anything waiting for the table to empty.
+   */
+  private forget(id: RequestId): void {
+    this.pending.delete(id);
+    this.releaseQuietWaiters();
+  }
+
+  /** Release the `whenQuiet` waiters, if there is now nothing in flight. */
+  private releaseQuietWaiters(): void {
+    if (!this.isQuiet) {
+      return;
+    }
+    for (const resolve of this.quietWaiters.splice(0)) {
+      resolve();
+    }
+  }
+
   /** Reject one pending request, if that id is pending at all. */
   private failIfPending(id: RequestId | null, error: (id: RequestId) => Error): void {
     if (id === null) {
@@ -471,7 +526,7 @@ export class GenerationClient {
     if (pending === undefined) {
       return;
     }
-    this.pending.delete(id);
+    this.forget(id);
     pending.fail(error(id));
   }
 
@@ -481,6 +536,7 @@ export class GenerationClient {
     // Cleared before any rejection runs, so a handler reacting to one of them
     // cannot observe a table that still claims those ids are in flight.
     this.pending.clear();
+    this.releaseQuietWaiters();
     for (const [id, pending] of abandoned) {
       pending.fail(new WorkerFailureError(id, pending.request, detail));
     }
