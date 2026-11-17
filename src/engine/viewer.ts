@@ -8,7 +8,9 @@ import {
   Scene,
   WebGLRenderer,
 } from 'three';
-import { CAMERA_FAR, CAMERA_FOV, CAMERA_NEAR, updateOrbit } from './camera';
+import type { CameraPose } from '@motion/rig';
+import { CAMERA_FAR, CAMERA_FOV, CAMERA_NEAR, applyRig } from './camera';
+import { ROOM_POSE } from './poses';
 import { createRoom } from './room';
 import type { RoomHandle } from './room';
 
@@ -23,8 +25,17 @@ import type { RoomHandle } from './room';
  *
  * `docs/architecture.md` §2: exactly one `setAnimationLoop` in the project,
  * and it is `start()` below. There is no `requestAnimationFrame` anywhere in
- * `src/`. The loop has one writer per property — `updateOrbit` writes the
- * camera and nothing else does — and allocates nothing.
+ * `src/`, and gsap's own ticker does not have one either — the loop advances
+ * gsap's root timeline through `src/motion/clock.ts`. The loop has one writer
+ * per property, `applyRig` writing the camera and nothing else writing it, and
+ * it allocates nothing.
+ *
+ * The loop asks its caller for the rig once per frame rather than reaching for
+ * a flight itself: composing the layers is `app`'s job, and a viewer that
+ * imported `state` or `motion` at runtime would be the layer boundary of
+ * `docs/architecture.md` §1 going the wrong way. Without a frame source the
+ * camera stands at the room's own vantage, which is what the M4 scenario in
+ * `e2e/room.spec.ts` looks at.
  */
 
 /** The fog and the void outside the doorways are the same colour. */
@@ -69,8 +80,21 @@ export interface Viewer {
   dispose(): void;
 }
 
+/** What a viewer needs from the layer composing it. */
+export interface ViewerOptions {
+  /**
+   * The rig to put the camera at, asked for once per frame with the loop's own
+   * timestamp in seconds. The caller advances its animation clock here, so the
+   * one loop drives every moving thing in the application.
+   */
+  readonly frame?: (seconds: number) => CameraPose;
+}
+
 /** Build a viewer that draws into `canvas`. Does not load a room or start. */
-export function createViewer(canvas: HTMLCanvasElement): Viewer {
+export function createViewer(
+  canvas: HTMLCanvasElement,
+  options: ViewerOptions = {}
+): Viewer {
   const renderer = new WebGLRenderer({
     canvas,
     antialias: true,
@@ -130,8 +154,9 @@ export function createViewer(canvas: HTMLCanvasElement): Viewer {
       // The only `setAnimationLoop` in the project. `time` is the timestamp
       // three.js already has; a `Clock` would be a second source of truth for
       // the same number.
+      const { frame } = options;
       renderer.setAnimationLoop((time) => {
-        updateOrbit(camera, time / 1000);
+        applyRig(camera, frame?.(time / 1000) ?? ROOM_POSE);
         renderer.render(scene, camera);
       });
     },

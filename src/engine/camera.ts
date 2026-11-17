@@ -1,77 +1,75 @@
 import type { PerspectiveCamera } from 'three';
-import { ROOM_HEIGHT, ROOM_INRADIUS } from './constants';
+import type { CameraPose } from '@motion/rig';
+import { ROOM_HEIGHT } from './constants';
 import { cameraFocus } from './scratch';
 
 /**
- * Where the camera is this frame.
+ * The rig, copied onto the camera.
  *
- * A slow turn on the spot, looking outward at whichever wall is ahead, so that
- * the room shows all four shelved walls and both doorways without anyone
- * touching a control. It is deliberately the simplest motion that proves the
- * room is there: the `CameraRig`, the labelled timeline and the flight from
- * room to wall to shelf to book are M5's, and a hand-written animation here
- * would be the second one ADR-0004 exists to prevent.
+ * This function is the only writer of the camera's position, orientation and
+ * field of view (`docs/architecture.md` §2), it is called exactly once per
+ * frame from the one `setAnimationLoop` in `./viewer.ts`, and it allocates
+ * nothing: the point it looks at is the module scratch of `./scratch.ts`, and
+ * `lookAt` is handed that same object every frame.
  *
- * This function is the only writer of the camera's position and orientation
- * (`docs/architecture.md` §2), and it allocates nothing: the focus point is
- * the module scratch of `./scratch.ts` and `lookAt` is given that same object
- * every frame.
+ * It is also the whole of what `engine` knows about motion. The rig's six
+ * numbers are animated in `src/motion` with no three.js in sight (ADR-0004),
+ * and the camera is where those numbers stop being numbers.
+ *
+ * **The rig's frame is the room's own.** `bearing`, `radial` and `lateral` are
+ * the three parameters `placeOnSide` in `./layout.ts` places every object in a
+ * room with, so the arithmetic below is that function's arithmetic: `radial`
+ * out along the bearing, `lateral` along the wall's tangent, which is the
+ * outward normal turned a quarter turn towards +Z. A camera at a volume's
+ * `lateral` and `height` is looking straight down the row at that volume, and
+ * `__tests__/camera.test.ts` asserts exactly that against `spineMatrix`.
  */
-
-/** Seconds for one full turn. Slow enough to read a shelf as it passes. */
-export const ORBIT_PERIOD_SECONDS = 72;
-
-/**
- * Where the turn begins. Hexagon side 0 is a doorway (`./constants.ts`), so a
- * turn starting at a bearing of zero opens on the dark of a corridor with no
- * neighbouring room in it yet. A sixth of a turn puts the first shelved wall
- * in front of the camera at the moment the page loads.
- */
-const ORBIT_PHASE = Math.PI / 3;
-
-/**
- * How far the camera stands from the middle of the room — *away* from the wall
- * it is looking at, not towards it. Standing on the near side puts the camera
- * 1.1 m from a 2.4 m wall and crops it to a shelf and a half; standing on the
- * far side gives it 2.0 m, which is the whole wall from floor to ceiling.
- */
-const ORBIT_RADIUS = 0.45;
-
-/** Eye height of someone standing in the gallery. */
-const EYE_HEIGHT = 1.52;
-
-/**
- * Where the camera looks, as a multiple of the inradius: past the wall rather
- * than at it, so the view is square to the shelves instead of converging.
- */
-const FOCUS_REACH = 1.25;
-
-/** Slightly below eye level, which puts the middle shelves in the frame. */
-const FOCUS_DROP = 0.22;
-
-/** The bearing of the wall the camera is looking at after `elapsedSeconds`. */
-export function orbitBearing(elapsedSeconds: number): number {
-  return ORBIT_PHASE + (2 * Math.PI * elapsedSeconds) / ORBIT_PERIOD_SECONDS;
-}
-
-/** Point `camera` at the room from the bearing `elapsedSeconds` has reached. */
-export function updateOrbit(camera: PerspectiveCamera, elapsedSeconds: number): void {
-  const bearing = orbitBearing(elapsedSeconds);
-  const outwardX = Math.cos(bearing);
-  const outwardZ = Math.sin(bearing);
-
-  camera.position.set(-outwardX * ORBIT_RADIUS, EYE_HEIGHT, -outwardZ * ORBIT_RADIUS);
-  cameraFocus.set(
-    outwardX * ROOM_INRADIUS * FOCUS_REACH,
-    EYE_HEIGHT - FOCUS_DROP,
-    outwardZ * ROOM_INRADIUS * FOCUS_REACH
-  );
-  camera.lookAt(cameraFocus);
-}
 
 /** Near and far planes that bracket a room without clipping its far wall. */
 export const CAMERA_NEAR = 0.05;
 export const CAMERA_FAR = ROOM_HEIGHT * 25;
 
-/** Vertical field of view, in degrees. Wide enough to see a whole wall. */
+/**
+ * The field of view the camera is built with, and the one the room level uses.
+ * A flight narrows it as it closes in, which is the rig's business from then
+ * on: `fov` is one of its six fields precisely so that nothing else writes it.
+ */
 export const CAMERA_FOV = 58;
+
+/**
+ * How far ahead the point the camera looks at is placed, in metres.
+ *
+ * Any positive distance gives the same orientation, because `lookAt` only uses
+ * the direction. One metre keeps the numbers in the same range as the room, so
+ * a focus point printed in a debug session reads as a place rather than as a
+ * scaled vector.
+ */
+const LOOK_REACH = 1;
+
+/** Point `camera` where `rig` says, and give it the rig's field of view. */
+export function applyRig(camera: PerspectiveCamera, rig: CameraPose): void {
+  const outwardX = Math.cos(rig.bearing);
+  const outwardZ = Math.sin(rig.bearing);
+  const x = outwardX * rig.radial - outwardZ * rig.lateral;
+  const z = outwardZ * rig.radial + outwardX * rig.lateral;
+  camera.position.set(x, rig.height, z);
+
+  // Straight ahead along the bearing, lifted by the pitch. The camera looks
+  // along the wall's normal rather than at a point on it, which is what keeps
+  // the shelves square in the frame instead of converging.
+  const ahead = Math.cos(rig.pitch) * LOOK_REACH;
+  cameraFocus.set(
+    x + outwardX * ahead,
+    rig.height + Math.sin(rig.pitch) * LOOK_REACH,
+    z + outwardZ * ahead
+  );
+  camera.lookAt(cameraFocus);
+
+  // Only when it has actually changed: the projection matrix is recomputed by
+  // `updateProjectionMatrix`, and a flight changes the field of view on a
+  // fraction of the frames it runs for.
+  if (camera.fov !== rig.fov) {
+    camera.fov = rig.fov;
+    camera.updateProjectionMatrix();
+  }
+}

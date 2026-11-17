@@ -58,6 +58,24 @@ export function wallBearing(wall: number): number {
 }
 
 /**
+ * The angle equal to `bearing` that is nearest to `reference`: the same
+ * direction, written so that turning to it is the shorter way round.
+ *
+ * A camera facing 60° and sent to a wall at 300° must turn back 120° and not
+ * forward 240°, and a tween interpolates the number it is given. So the
+ * destination is the number that means the right direction *and* the right
+ * turn, which is the one within half a turn of where the camera already
+ * points. An exact half turn resolves one way rather than wavering:
+ * `Math.round` sends a tie up, so a turn of `+π` becomes `-π` and the camera
+ * swings through decreasing angles.
+ */
+export function nearestBearing(reference: number, bearing: number): number {
+  const fullTurn = 2 * Math.PI;
+  const turn = bearing - reference;
+  return reference + turn - fullTurn * Math.round(turn / fullTurn);
+}
+
+/**
  * Yaw, about +Y, that puts a box's local +X along hexagon side `side` and its
  * local +Z pointing into the room.
  *
