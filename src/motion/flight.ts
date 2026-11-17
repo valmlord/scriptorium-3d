@@ -285,23 +285,25 @@ export function createFlight(origin: FlightStop): Flight {
   }
 
   /**
-   * Whether the playhead is at the wanted stop *and* the route to it is the
-   * one that was asked for.
+   * Whether the playhead is at the stop that was last asked for.
    *
-   * The second half is not pedantry: a label is a level's name, so the built
-   * route and the wanted one can both have a `wall` stop at the same time on
-   * the timeline and mean different walls. Reporting "arrived" on the label
-   * alone would be a debug hook that lies.
+   * A label is a level's name, so the built route and a newly wanted one can
+   * both carry a `wall` stop at the same time on the timeline and mean
+   * different walls — and reporting "arrived" on the label alone would be a
+   * debug hook that lies. What makes the playhead's position enough to answer
+   * with is `advance()`: a retarget whose route disagrees at or above its
+   * target either starts a retreat or replaces the legs below the stop it is
+   * standing at, and either way it ends by aiming the playhead at a time
+   * strictly away from where it is. So the flight never comes to rest at a
+   * label whose route has been superseded, and `__tests__/flight.test.ts`
+   * holds the case: asked for another shelf while standing at one, it reports
+   * that it has not arrived.
    */
   function isAtWantedStop(): boolean {
     if (wantedRoute === null) {
       return true;
     }
-    const legs = wantedRoute.legs;
-    const targetIndex = legIndexOf(wantedLabel, legs);
-    if (targetIndex >= keptLegCount(legs)) {
-      return false;
-    }
+    const targetIndex = legIndexOf(wantedLabel, wantedRoute.legs);
     const destination = targetIndex === -1 ? 0 : endSecondsOf(targetIndex);
     return Math.abs(timeline.time() - destination) < PLAYHEAD_EPSILON_SECONDS;
   }

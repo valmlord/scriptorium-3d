@@ -1754,11 +1754,25 @@ never a movement they did not.
 **What consistency means here, precisely.** At every instant: the FSM names a level, the playhead is
 somewhere on the built route, and the rig is the timeline evaluated at the playhead. The FSM and the
 rig may disagree about **where the camera is**, because that disagreement is what an animation is.
-They may not disagree about **where it is going**. This is why `waitForIdle()` cannot be answered by
-"no tween is running": a label is a level's name, so a `wall` label on a route built for another
-wall sits at the same time on the timeline and means a different place. The flight answers with both
-halves — the playhead is at the wanted label, and the route to it is the one that was wanted — and
-`__tests__/flight.test.ts` has the case where the label alone would have said yes.
+They may not disagree about **where it is going**.
+
+That is also what makes `waitForIdle()` answerable at all, and the reasoning is worth writing out
+because the obvious implementation is subtly wrong. A label is a level's **name**, so the route the
+flight is on and a route it has just been asked for can both carry a `wall` stop at the same time on
+the timeline and mean different walls; "the playhead is at the wanted label" is therefore not by
+itself a statement about where the camera is. What rescues it is the rule above: a retarget whose
+route disagrees at or above its target either starts a retreat or replaces the legs below the stop
+the playhead is standing at, and either way it ends by aiming the playhead at a time strictly away
+from where it is. **A superseded label is never a resting place**, so "no tween is running and the
+playhead is at the wanted label" is sound — and the case that would otherwise have reported a false
+arrival, being asked for another shelf while standing at one, is a named test.
+
+This was not obvious in the writing. The flight carried a second check — that the built route still
+agreed with the wanted one down to the target — until the mutation pass showed that no mutation
+could make it fire: every route that disagrees leaves a tween running, and after `dispose()` the
+check made `whenSettled()` hang on a flight that would never move again. A guard that cannot fail
+is this project's recurring defect in miniature, so it is gone and the invariant that replaces it is
+stated here and in the code.
 
 **Alternatives rejected.**
 
