@@ -11,6 +11,13 @@ Application root. The layer allowed to import every other one, and the place whe
 - The URL codec in `url.ts`: the SPEC §7 fragment to an `Address` and back, as a pure pair of
   functions. It touches no browser global — `architecture.md` §4 gives the URL to the navigation FSM
   and nothing else may read `location`.
+- The choreography in `choreography.ts`: the navigation machine, the engine's camera poses and
+  the flight, joined. It has no three.js and no DOM in it, which is what lets an interrupted
+  flight be tested without a WebGL context.
+- The controls in `controls.ts`: the pointer and the keyboard turned into navigation events. The
+  only part of M5 that touches the DOM.
+- The debug hook in `debug.ts`: `window.__scriptorium` as `testing.md` section 7 specifies it,
+  installed from `src/main.ts` in development and test builds only.
 
 ## What cannot be imported
 

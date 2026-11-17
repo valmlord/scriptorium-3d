@@ -205,17 +205,28 @@ src/
   worker/   the core behind a Web Worker: typed protocol, request ids, cancellation, LRU cache
   engine/   three.js: renderer, hexagonal room, instanced spines, lighting, fog, LOD
   motion/   gsap: CameraRig, master timeline with labels, easing tokens
-  state/    navigation FSM: LIBRARY → ROOM → WALL → SHELF → BOOK → PAGE
+  state/    navigation FSM: ROOM → WALL → SHELF → BOOK
   ui/       DOM overlays: reader, search, address bar, i18n
   app/      router (URL ↔ address) and composition of the layers
 ```
 
 Invariants enforced by lint, not by good intentions — see `docs/architecture.md`.
 
-**Animation model.** Every transition between navigation levels is one GSAP timeline carrying a label.
-Going back is `.reverse()` of that same timeline, never a second hand-written animation. GSAP animates a
-plain `CameraRig` object of numeric fields; the rig is applied to the three.js camera once per frame. GSAP
-never touches three.js objects directly.
+**Four navigation levels, not six.** This read `LIBRARY → ROOM → WALL → SHELF → BOOK → PAGE` until M5
+built the machine. The two that went are the two that are not places the camera can be: the library has
+no viewpoint of its own — there is nowhere to stand to look at `36^3200` books — and a page is a turn
+inside the reader (M6), which moves no camera and changes no level. A level is a camera distance, and a
+state that cannot be flown to is a state the camera and the machine would have had to disagree about.
+`page` stays in the address (§3) and in the URL (§7); a book is entered at its page 0.
+
+**Animation model.** The levels are labels on one GSAP timeline, one leg between each pair. Flying to a
+level takes that timeline's playhead to its label, and going back plays the same timeline backwards to the
+label above — never a second hand-written animation. (`.reverse()` itself is not the call, because it has
+one destination and the ladder has four levels; ADR-0030 has the mechanism and what happens when a flight
+is interrupted halfway.) GSAP animates a plain `CameraRig` object of numeric fields; the rig is applied to
+the three.js camera once per frame, inside the one render loop. GSAP never touches three.js objects
+directly, and its own ticker does not drive anything: the render loop advances GSAP's root timeline, so the
+project keeps the single animation loop `docs/architecture.md` §2 requires.
 
 **Generation off the main thread.** A page costs single-digit milliseconds, which is fine once and
 ruinous 32 times in a frame while generating shelf titles. All generation goes through the worker

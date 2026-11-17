@@ -16,9 +16,9 @@ accordingly.
 | `core`       | Vitest unit + **fast-check property tests** + committed golden vectors + mutation testing                                            | Pure, deterministic, no I/O. There is no excuse for anything less than complete coverage here.               |
 | `worker`     | Unit tests on the protocol handler as a pure function; integration test through a real `Worker`                                      | The handler is where the bugs are; the thread is where the flakes are. Test them separately.                 |
 | `state`      | Exhaustive transition table test — every `(state, event)` pair asserted, legal or rejected                                           | An FSM is a finite object, so "we tested the paths we thought of" is a choice, not a limitation.             |
-| `motion`     | Timelines advanced with GSAP's ticker under fake time, asserting rig values at labels                                                | Numbers only, no WebGL (ADR-0004). If a timeline needs a canvas to be tested, it is in the wrong layer.      |
+| `motion`     | Timelines advanced by the same clock the render loop drives, in explicit steps, asserting rig values at labels                       | Numbers only, no WebGL (ADR-0004). If a timeline needs a canvas to be tested, it is in the wrong layer.      |
 | `engine`     | Pure layout maths (shelf positions, instance matrices, address↔`instanceId`) tested directly; the renderer itself is not unit-tested | Asserting on a GPU is a losing game. Extract the arithmetic, keep the renderer thin enough to review by eye. |
-| `ui` / `app` | Playwright end-to-end against the built site                                                                                         | The only place where "the user typed a phrase and arrived at the book" is actually a true statement.         |
+| `ui` / `app` | Playwright end-to-end against the built site; the parts of `app` that touch no browser global are unit-tested directly               | The only place where "the user typed a phrase and arrived at the book" is actually a true statement.         |
 
 ## 2. Property tests over examples
 
@@ -162,7 +162,16 @@ no more than 1% of frames exceed 20 ms, measured through the debug hook.
 
 ## 6. End-to-end
 
-Playwright, Chromium plus WebKit, against `npm run build` output — never against the dev server.
+Playwright, Chromium plus WebKit, against built output — never against the dev server.
+
+**The build the suite runs against is a test build**, `npm run build:e2e`, which is the production
+pipeline in test mode. The one difference is the branch in `src/main.ts` that installs
+`window.__scriptorium`: §7 puts the hook in development and test builds only, and without it every
+scenario below would be back to sleeping on a duration. `npm run test:e2e` builds it itself, so a
+local run and the CI job cannot differ and neither can serve a bundle left over from an earlier
+build. What the **production** bundle contains is a question no browser running the test build can
+answer, so it is asserted where it can be — `src/__tests__/production-bundle.test.ts` builds both
+and compares them, and `npm run build` is still built by the `verify` job.
 
 Mandatory scenarios, each one owned by the milestone that introduces it:
 
@@ -175,6 +184,9 @@ Mandatory scenarios, each one owned by the milestone that introduces it:
 6. `prefers-reduced-motion: reduce` replaces flights with cuts, and every level stays reachable.
 7. Keyboard-only navigation reaches a page of text without a mouse.
 8. Axe reports no serious or critical violations on the reader and the search panel.
+9. A volume chosen with the pointer is flown to, through every level between, and `Escape` flies
+   back up the same way. The pointer tells a volume from the fabric of the room before it is
+   clicked, and the room's own vantage is where the way back ends.
 
 **No pixel-diff screenshots of the WebGL canvas.** GPU and driver differences make them flake, and a flaky
 test trains everyone to ignore red. Assert on the scene's _state_ instead — see §7. Screenshots of DOM
@@ -182,21 +194,39 @@ overlays are fine.
 
 ## 7. The debug hook
 
-The app exposes `window.__scriptorium` **in development and test builds only** (stripped by a
-`define` at build time, verified by a test asserting it is `undefined` in production output):
+The app exposes `window.__scriptorium` **in development and test builds only**:
 
 ```ts
 interface DebugHook {
   state(): NavigationState; // current FSM node
   address(): Address | null; // where the user is
   rig(): CameraRigSnapshot; // numeric camera state
-  frames(): FrameTimings; // rolling frame budget
+  frames(): never; // M10's; refuses by name until then
   waitForIdle(): Promise<void>; // timelines settled, worker queue empty
 }
 ```
 
 This is what makes end-to-end tests deterministic instead of `waitForTimeout(2000)`. Any test that sleeps
 on a fixed duration is rejected in review; `waitForIdle()` exists precisely so that it never has to.
+
+**How it is stripped.** The call that installs it stands behind `import.meta.env.MODE !==
+'production'` in `src/main.ts`, which Vite replaces with a literal at build time, so a production
+build drops the branch, the module behind it and the name itself.
+`src/__tests__/production-bundle.test.ts` builds a production bundle and a test bundle in memory and
+asserts the name is **absent** from the first and **present** in the second. Only asserting the
+absence would pass just as well against a hook that had been renamed or deleted, which is the shape
+of guard this project keeps finding.
+
+**`frames()` refuses rather than reporting zeros.** The rolling frame budget is measured in M10, and
+until then the hook throws `FrameTimingsUnavailableError`, naming the milestone. A hook that
+answered with zeros would make §5's frame-budget assertion pass against a measurement nobody took —
+a debug hook that lies is worse than one that is absent.
+
+**`waitForIdle()` is composed, not owned.** It resolves when every source of pending work the
+composition knows about is idle. In M5 that is the camera flight: the playhead has arrived at the
+label for the level the FSM is at, and no playhead tween is running (ADR-0030 explains why the label
+alone is not enough). From M6 the worker client's `pendingCount` joins it, through the composition in
+`src/main.ts` rather than through a second opinion held inside the hook.
 
 ## 8. Coverage thresholds
 
@@ -206,6 +236,12 @@ on a fixed duration is rejected in review; `waitForIdle()` exists precisely so t
 | `src/worker/**`, `src/state/**` | 90%                                       |
 | `src/motion/**`                 | 80%                                       |
 | `src/engine/**`, `src/ui/**`    | no threshold; covered by e2e              |
+| `src/app/**`                    | no threshold; see below                   |
+
+`src/app/**` carries no threshold for the same reason `engine` does not: `url.ts` and
+`choreography.ts` are unit-tested directly and `controls.ts` is a DOM event handler that only an
+end-to-end test can exercise, so one number over the three would be a number about the mixture
+rather than about any of them.
 
 Thresholds only ratchet upward. Lowering one requires a line in the PR description explaining what was
 given up.

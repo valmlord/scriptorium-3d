@@ -10,6 +10,7 @@
     "prepare": "husky",
     "dev": "vite",
     "build": "vite build",
+    "build:e2e": "vite build --mode test",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.core.json",
     "lint": "eslint .",
@@ -22,7 +23,7 @@
     "bench": "vitest bench --run",
     "bench:report": "vitest bench --run --outputJson bench-report.json && vite-node scripts/report-generation-cost.ts bench-report.json",
     "coverage": "vitest run --coverage",
-    "test:e2e": "playwright test",
+    "test:e2e": "npm run build:e2e && playwright test",
     "verify": "npm run typecheck && npm run lint && npm run format:check && npm run test",
     "golden:regenerate": "vite-node scripts/regenerate-golden-vectors.ts",
     "test:mutation": "stryker run",
@@ -53,6 +54,7 @@
   },
   "dependencies": {
     "@noble/hashes": "2.4.0",
+    "gsap": "3.15.1",
     "three": "0.187.0"
   }
 }

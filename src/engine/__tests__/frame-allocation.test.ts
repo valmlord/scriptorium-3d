@@ -70,8 +70,8 @@ vi.mock('three', async (importOriginal) => {
 
 const three = await import('three');
 const { PerspectiveCamera } = three;
-const { ORBIT_PERIOD_SECONDS, orbitBearing, updateOrbit } =
-  await import('@engine/camera');
+const { applyRig } = await import('@engine/camera');
+const { ROOM_POSE } = await import('@engine/poses');
 const { cameraFocus, roomInstanceColor, roomInstanceMatrix } =
   await import('@engine/scratch');
 const { createRoom } = await import('@engine/room');
@@ -102,10 +102,21 @@ beforeEach(resetCounters);
 describe('the frame path', () => {
   it('allocates no three.js objects over ten thousand frames', () => {
     const camera = new PerspectiveCamera(58, 1.5, 0.05, 60);
+    // One rig, written in place, exactly as the flight writes it: the field of
+    // view moves too, so the frames that recompute the projection matrix are
+    // part of what is being counted.
+    const rig = { ...ROOM_POSE };
     resetCounters();
 
     for (let frame = 0; frame < FRAMES; frame += 1) {
-      updateOrbit(camera, frame / 60);
+      const progress = frame / FRAMES;
+      rig.bearing = ROOM_POSE.bearing + progress * 2 * Math.PI;
+      rig.radial = ROOM_POSE.radial + progress;
+      rig.height = ROOM_POSE.height - progress / 2;
+      rig.lateral = progress / 2 - 0.25;
+      rig.pitch = ROOM_POSE.pitch * (1 - progress);
+      rig.fov = ROOM_POSE.fov - 8 * progress;
+      applyRig(camera, rig);
     }
 
     expect(allocations).toEqual({
@@ -121,31 +132,45 @@ describe('the frame path', () => {
     const camera = new PerspectiveCamera(58, 1.5, 0.05, 60);
     const focus = cameraFocus;
 
-    updateOrbit(camera, ORBIT_PERIOD_SECONDS / 12);
+    // Looking along +Z from the middle of the room, level.
+    applyRig(camera, {
+      bearing: Math.PI / 2,
+      radial: 0,
+      height: 1.5,
+      lateral: 0,
+      pitch: 0,
+      fov: 58,
+    });
 
-    // A sixth of a turn from the phase the orbit starts at brings the wall
-    // bearing to 90 degrees, so the focus is out along +Z and nowhere else,
-    // and the camera stands on the opposite side of the room from it.
     expect(cameraFocus).toBe(focus);
-    expect(focus.x).toBeCloseTo(0, 9);
-    expect(focus.z).toBeGreaterThan(ROOM_INRADIUS);
-    expect(camera.position.z).toBeLessThan(0);
-    expect(orbitBearing(ORBIT_PERIOD_SECONDS / 12)).toBeCloseTo(Math.PI / 2, 12);
+    expect(focus.x).toBeCloseTo(0, 12);
+    expect(focus.y).toBeCloseTo(1.5, 12);
+    expect(focus.z).toBeGreaterThan(0);
+    expect(camera.position.z).toBeCloseTo(0, 12);
   });
 
-  it('is the only writer of the camera, and moves it every frame', () => {
+  it('is the only writer of the camera, and writes all of it every frame', () => {
     const camera = new PerspectiveCamera(58, 1.5, 0.05, 60);
 
-    updateOrbit(camera, 0);
-    const start = camera.position.clone();
-    updateOrbit(camera, ORBIT_PERIOD_SECONDS / 2);
-    const half = camera.position.clone();
-    updateOrbit(camera, ORBIT_PERIOD_SECONDS);
+    applyRig(camera, ROOM_POSE);
+    const opening = camera.position.clone();
+    const facing = camera.quaternion.clone();
 
-    expect(half.x).toBeCloseTo(-start.x, 9);
-    expect(half.y).toBeCloseTo(start.y, 12);
-    expect(camera.position.x).toBeCloseTo(start.x, 9);
-    expect(camera.position.z).toBeCloseTo(start.z, 9);
+    // Half a turn away, further out along the bearing and lower down.
+    applyRig(camera, {
+      ...ROOM_POSE,
+      bearing: ROOM_POSE.bearing + Math.PI,
+      radial: ROOM_INRADIUS / 2,
+      height: 0.6,
+    });
+
+    expect(camera.position.distanceTo(opening)).toBeGreaterThan(ROOM_INRADIUS / 2);
+    expect(camera.quaternion.angleTo(facing)).toBeGreaterThan(Math.PI / 2);
+
+    applyRig(camera, ROOM_POSE);
+
+    expect(camera.position.distanceTo(opening)).toBeCloseTo(0, 12);
+    expect(camera.quaternion.angleTo(facing)).toBeCloseTo(0, 12);
   });
 });
 

@@ -4,8 +4,9 @@ Animation timeline and easing. Drives numerical values; does not know about Thre
 
 ## What belongs here
 
-- GSAP timelines and tweens
-- Animation callbacks
+- The `CameraRig`: the six numbers a flight animates
+- The master timeline, one label per navigation level, and the playhead that moves between them
+- The clock: GSAP's root timeline is advanced from the render loop, not from GSAP's own ticker
 - Easing and sequencing logic
 - Duration and timing calculations
 
@@ -25,7 +26,9 @@ Animation timeline and easing. Drives numerical values; does not know about Thre
 
 ## What calls @motion
 
-- `@app`, which owns the wiring: a timeline animates a plain `CameraRig` of numbers and `@app` hands
-  that rig to `@engine`, where it is applied to the camera once per frame (ADR-0004)
+- `@app`, which composes the layers: it builds the flight from the routes `@engine` computes for the
+  navigation state, and gives `@engine`'s viewer a callback returning the rig for a given time. The
+  write itself is `applyRig` in `@engine/camera`, inside the one render loop (ADR-0004)
 
-`@engine`, `@state` and `@ui` see this layer as types only.
+`@engine`, `@state` and `@ui` see this layer as types only. A rig that the engine moved and the state
+machine also moved would be the two writers ADR-0004 exists to prevent.

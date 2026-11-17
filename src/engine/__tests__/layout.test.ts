@@ -19,6 +19,7 @@ import {
 import {
   HEXAGON_SIDES,
   SHELF_BOARDS_PER_ROOM,
+  nearestBearing,
   shelfBoardMatrix,
   shelfCentreHeight,
   shelfSurfaceHeight,
@@ -334,5 +335,42 @@ describe('spine transforms addressed by instance slot', () => {
     }
 
     expect(places.size).toBe(SPINES_PER_ROOM);
+  });
+});
+
+describe('the nearest equal bearing', () => {
+  it('leaves a bearing that is already the nearest one alone', () => {
+    expect(nearestBearing(1, 1)).toBe(1);
+    expect(nearestBearing(0, Math.PI / 3)).toBeCloseTo(Math.PI / 3, 12);
+  });
+
+  it('turns back rather than most of the way round', () => {
+    // From 60 degrees to 300 is a turn of 120 the short way and 240 the long
+    // way, and a tween interpolates the number it is given.
+    const from = Math.PI / 3;
+    const to = (5 * Math.PI) / 3;
+
+    const nearest = nearestBearing(from, to);
+
+    expect(nearest).toBeCloseTo(-Math.PI / 3, 12);
+    expect(Math.abs(nearest - from)).toBeCloseTo((2 * Math.PI) / 3, 12);
+  });
+
+  it('means the same direction, whatever it does to the number', () => {
+    for (let side = 0; side < HEXAGON_SIDES; side += 1) {
+      for (const reference of [-7, -1, 0, 1, 4, 11]) {
+        const bearing = sideBearing(side);
+        const nearest = nearestBearing(reference, bearing);
+        const turns = (nearest - bearing) / (2 * Math.PI);
+
+        expect(turns).toBeCloseTo(Math.round(turns), 12);
+        expect(Math.abs(nearest - reference)).toBeLessThanOrEqual(Math.PI + 1e-12);
+      }
+    }
+  });
+
+  it('resolves an exact half turn one way rather than wavering', () => {
+    expect(nearestBearing(0, Math.PI)).toBeCloseTo(-Math.PI, 12);
+    expect(nearestBearing(0, -Math.PI)).toBeCloseTo(-Math.PI, 12);
   });
 });
