@@ -7,7 +7,8 @@
     "configFile": "vitest.stryker.config.ts",
     "related": false
   },
-  "reporters": ["html", "clear-text", "progress"],
+  "reporters": ["html", "clear-text", "progress", "json"],
+  "reporters_comment": "The `json` report is the one `scripts/check-mutation-report.ts` reads after every run. A survivor is a claim that a mutant ran its tests and none of them minded, and `testsCompleted` is the part of that claim nobody was reading: eight mutants were reported as survivors of runs that stopped at 1 of 250 tests, because a test file whose import throws registers no failing test (ADR-0031). The html report is for people and the clear-text one for the log; neither is machine-readable.",
   "htmlReporter": {
     "fileName": "reports/mutation/index.html"
   },
