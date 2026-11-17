@@ -26,15 +26,6 @@ import { fromBytesBE } from './prf';
  * bijection (§4) — and holds no state.
  */
 
-/**
- * The format version, carried in every shareable URL (SPEC §4.5, §7).
- *
- * It exists so that a link made under one format is refused rather than
- * silently opened at different text. Bumping it is a deliberate act that
- * accompanies a format change, never a routine release chore.
- */
-export const FORMAT_VERSION = 1;
-
 /** A book's title is the first 25 characters of its page 0 (SPEC §5). */
 export const TITLE_LENGTH = 25;
 

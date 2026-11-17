@@ -1699,6 +1699,217 @@ and adding a step to it would be the easy half of the answer with the reporting 
 
 ---
 
+## ADR-0029 — The layer rule's line runs inside `core`, not around it
+
+**Decision.** `core` is two groups of modules, and the layer rule is phrased on the groups rather than on
+the layer:
+
+| group                  | modules                                             | who may import it at runtime |
+| ---------------------- | --------------------------------------------------- | ---------------------------- |
+| the address model      | `address`, `alphabet`, `bignum`, `errors`, `format` | every layer                  |
+| the generation surface | `prf`, `feistel`, `library`, and the `index` barrel | `worker` only                |
+
+`FORMAT_VERSION` moves out of `library.ts` into a `format.ts` of its own, the barrel is closed to every
+layer but `worker`, and all seven layer directories plus the composition root `src/*.ts` get a block in
+`eslint.config.js` — `state`, `app` and `src/main.ts` had none. `src/__tests__/` deliberately gets none:
+those three files are the suite's own meta-tests and belong to no layer.
+
+**Why.** `architecture.md` §1 said `engine → (three only)` and then said of itself: _"These are enforced
+with `no-restricted-imports` in the ESLint config. The lint rule is the specification; this list is its
+explanation."_ Issue #39 found the two disagreeing. Verifying the rest found five more, so the document
+and the rule disagreed in six ways at once:
+
+| layer    | the table said                 | the rule enforced                                                             |
+| -------- | ------------------------------ | ----------------------------------------------------------------------------- |
+| `engine` | `(three only)`                 | `@core/*` unrestricted — a `getPage` on the main thread, lint-clean           |
+| `motion` | `(gsap only)`                  | the same hole, unmentioned by the issue                                       |
+| `state`  | `core types`                   | **no block at all**: anything, including `three` and the generation surface   |
+| `app`    | everything, and uniquely so    | **no block at all**, which looked right only because `app` is allowed most    |
+| `worker` | `worker → core`                | `@motion/*`, `@state/*`, `three` and `gsap` all unrestricted                  |
+| `ui`     | `state`, `worker client`, i18n | `@state/*` and all of `@worker/*` forbidden at runtime — stricter, not looser |
+
+Five of the six are the rule being **looser** than the document, and one is the rule being **stricter**.
+
+The specification is neither wording. It is ADR-0005's reasoning, which is about **generation**: "a direct
+`getPage` on the main thread is a dropped frame waiting for the right moment", on measurements putting a
+shelf of 32 titles at 14.8 to 45.0 ms across four machines — one and a half to two and a half frames, with
+nothing left to render in. That argument does not reach `toLinear` on a five-field address, a radix table,
+or a constant naming how many volumes a shelf holds. `core` imports nothing, and those cost nothing to
+call, so depending on them couples a layer to no weight at all. **So the boundary ADR-0005 draws is not
+between layers; it is inside `core`**, and once it is drawn there the answer to #39's question falls out:
+PR #37's four `@core/address` imports in `src/engine` were right, and a `getPage` beside them would not
+have been.
+
+Three things follow, and each closes a route around the first:
+
+- **`FORMAT_VERSION` moves to `src/core/format.ts`.** It is a constant naming the frozen format (SPEC
+  §4.5) and it lived in `library.ts`, which made `src/app/url.ts` import the generation module to write
+  `v1` into a fragment. `address.ts` was the other candidate and is the wrong owner: the version covers
+  `DOMAIN_TAG`, the alphabet order, `ROUNDS`, `PRF_BYTES` _and_ the linearisation, so filing it under the
+  address model would have been a second comment that lies. A module of its own imports nothing, names one
+  thing, and costs nothing to read.
+- **`@core/index` is closed to every layer but `worker`.** It re-exports `./library`, so a group naming
+  `@core/library` is defeated by one import statement — and `url.ts` was already through it. Non-worker
+  layers import the specific module, as `engine` already did.
+- **`ui`'s row is reconciled toward the table, not the rule.** Runtime `@worker/client` and `@state/*` are
+  allowed; `@core`'s address model is allowed with it, because excluding `ui` from arithmetic that costs
+  nothing would reinstate the over-broad shape this record removes, and `ui` formats addresses. This is the
+  one row that moved in the opposite direction from the others, and the reason is that it is the only one
+  where the rule forbade something the architecture grants and the roadmap needs: M6 wires the reader to
+  the worker client, so the rule as it stood was a red build waiting for the next milestone rather than a
+  boundary anyone had chosen. Where the rule was looser than the document the document won; here the
+  document was the narrower claim about what may happen at runtime, and it won again. The rule never wins
+  on its own — it is the specification only once someone has decided what it should say.
+
+**Two rules carry the boundary, not one, and the second exists because the first has holes a group
+cannot close.** `no-restricted-imports` matches gitignore patterns against the import string and visits
+only the static forms. Five spellings got past it, each verified by importing `getPage` through it and
+calling it:
+
+| spelling                            | why the groups cannot refuse it                                                               |
+| ----------------------------------- | --------------------------------------------------------------------------------------------- |
+| `import('@core/library')`           | the rule has no `ImportExpression` visitor at all in ESLint 10.9.1                            |
+| ``import(`@core/library`)``         | a `TemplateLiteral`, not a `Literal`; Rollup still resolves it statically                     |
+| `from '@core//library'`             | a doubled slash is not a path segment, so `*` never matches it                                |
+| `from '../core/'`                   | the `!**/core/` negation below **must** re-admit this form, or the address model goes with it |
+| `from '../core/address/../library'` | `!**/core/address` frees everything **under** a directory of that name, this included         |
+
+The last two are the sharp ones, and they are the same fact twice. A gitignore negation cannot say "this
+file but nothing under it": `!**/core/` was load-bearing for keeping `../core/address` free and the same
+stroke re-admitted the directory spelling, and `!**/core/address` freed any path escaping upward through
+it. That last one printed 3200 characters of real page text from `src/engine`, under a clean lint and a
+clean `tsc --noEmit`.
+
+**So the two mechanisms were given the jobs each is good at, rather than one patched twice.** The
+gitignore groups keep the canonical `@core` alias and nothing else, because that is where
+`allowTypeImports` has to be exact and gitignore is the only one of the two that gets it right. Every
+relative path into `core` goes to a regex. The reason is the one the groups kept running into: that
+syntax cannot anchor "relative paths only", so a group covering relative spellings had to be `**/core`,
+which also matched **any package whose last segment is `core`** — it refused `@stryker-mutator/core`, a
+devDependency of this repository, with a message about page generation, false in every clause. A regex
+can tell `../core/library` from `@stryker-mutator/core`; a gitignore pattern cannot.
+
+`no-restricted-syntax` is a core rule and takes an esquery selector, so this needs no new dependency, and
+every regex is built from the same `CORE_ADDRESS_MODEL` array, so the list of free modules still has one
+home (ADR-0013).
+
+The regexes make three different claims, and each carries a message that is true of what it fires on:
+
+| claim                                 | fires on                                         | message                                  |
+| ------------------------------------- | ------------------------------------------------ | ---------------------------------------- |
+| this is not how we cross layers       | any relative path into `core`                    | import core through its `@core` alias    |
+| this alias is not spelled canonically | `@core//library`, `@core/`, `@core/address/../x` | import core by its canonical module path |
+| this generates, and dynamically       | `import('@core/library')`, backticks included    | may not be imported dynamically          |
+
+The distinction is not cosmetic, and code-style §5 is why. `@core//address` names the **address model**,
+which every layer may import at runtime, so refusing it with a message about the generation surface would
+tell the reader the opposite of what the table above says. A test asserts that message does **not** say
+"generation surface".
+
+The first two claims are about spelling, so they have no type-only exemption: `import type { X } from
+'../core/library'` is refused as well, because a type import has the same alias available. Once a
+specifier is canonical, `no-restricted-imports` decides whether the module is allowed, with its
+`allowTypeImports` handling, which is correct and not worth reimplementing. `typeof import('@core/library')`
+is a `TSImportType`, is deliberately not reached, and has a test of its own, because a type costs nothing.
+
+**Why an allow-list, and why three spellings.** The generation group is written as "everything in `core`
+except the address model" rather than as the four module names, so a module added to `core` tomorrow is
+refused until someone decides it is address arithmetic. The patterns are gitignore-style over the import
+**string**, not the resolved file, so each spelling that reaches the same module needs its own entry:
+`@core/*` does not match `../core/library`, the globstar form does not match `@core/library`, and
+`moduleResolution: "bundler"` resolves a bare `../core` to the barrel — verified, not assumed, by
+type-checking an import of it. The bare-directory entry needs a trailing-slash negation beside it, because
+a gitignore pattern that matches a directory excludes everything under it and no later negation can
+re-include a file there; without it, `**/core` quietly took `../core/address` with it, and the test that
+says the address model stays free is what caught that.
+
+**What this does not cover, stated rather than left to be found.** Four things, none of them closed here:
+
+- **A relative cross-layer import into a layer other than `core`.** The layer groups are written on the
+  `@layer/*` aliases that every import in this repository uses, so `../ui/index` from `engine` is not
+  matched. That gap predates this record and belongs to all seven blocks. For `core` it is **closed**:
+  every relative path into `core` is refused, which is what let the groups shrink to the alias. Doing the
+  same for the other six means one regex each, and is a change to all eight blocks rather than to this
+  one boundary.
+- **A genuinely computed specifier**, `import('@core/' + name)`. Nothing static can see it. A backtick
+  specifier is _not_ computed, resolves statically, and is refused.
+
+  This list was short three times, and each missing entry was found by _running_ `allowed/../forbidden`
+  rather than by reasoning about the patterns. Whatever is still missing will be found the same way.
+
+- **The dynamic form of every refusal other than `core`'s split.** The second rule is installed only in
+  the six blocks that carry the generation restriction, and it matches only `core` specifiers, so
+  `three`, `gsap`, `@ui/*` and the cross-layer groups are held by the static rule alone — the rule with
+  no `ImportExpression` visitor. All of these lint clean today, verified rather than reasoned:
+  `void import('three')` in `motion` (rule 3), `void import('@ui/index')` in `engine` and
+  `void import('three')` in `ui` (rule 2), `void import('@worker/protocol')` in `ui` (rule 4),
+  `void import('@state/index')` in `worker` — the very row this record lists above as a defect it fixes,
+  whose static half is fixed and whose dynamic half is not — and `void import('gsap')` in `core`
+  (rule 1). Closing them means every group's list existing twice, as a gitignore pattern and as a regex,
+  which is the second home ADR-0013 exists to prevent; doing it properly means generating both from one
+  table, and that is a change to all eight blocks rather than to this one boundary. `core`'s split is
+  the one with both rules behind it because it is the one whose breach costs a frame rather than a
+  review comment.
+- **The bare `@core` alias.** No group matches it, and what refuses it is `npm run typecheck`:
+  `tsconfig.json` maps only `@core/*` and carries no `baseUrl`, so `from '@core'` does not resolve, and
+  `verify` runs `typecheck` before `lint`. Worth knowing that this rests on an asymmetry — `vite.aliases.ts`
+  _would_ resolve it, and `alias-agreement.test.ts` normalises `@core/*` to `@core`, so that guard cannot
+  notice. The dynamic-import selector does match it.
+  **Alternatives rejected.**
+
+- _Widen the document to match the rule: write `engine → three, core`._ That is the move the issue names
+  and refuses. It would make the rule true by giving up the property ADR-0005 bought, and the first
+  `getPage` in a layout function would be lint-clean.
+- _Narrow the rule to match the document: forbid `@core/*` in `engine` outright._ Then PR #37's imports
+  have to go, and `BOOKS_PER_SHELF`, `SHELVES_PER_WALL` and the linearisation get restated inside
+  `engine` — a second home for numbers that already have one, which code-style §3 forbids and ADR-0013
+  spent a record on.
+- _Name the three forbidden modules instead of allow-listing the rest._ Reads shorter and defaults the
+  wrong way: the next module in `core` would be importable everywhere until someone noticed, and "someone
+  noticed" is what this repository has spent three days not being able to rely on.
+- _Leave `FORMAT_VERSION` in `library.ts` and exempt it by name._ A per-symbol exemption is not something
+  `no-restricted-imports` can express, so the exemption would have had to be the whole module, which is
+  the hole.
+- _Grant `state` the worker client, since its README claimed it._ The table says `core types`, and
+  architecture §4 makes the FSM the source of truth for _where the user is_, not for page text — which is
+  fetched by whatever renders it. If M5 or M6 finds otherwise, that is a row in the table and a group in
+  the config changing together in one pull request, which is the mechanism working rather than failing.
+  The layer READMEs are brought in step with the rule in the same change; three of them granted runtime
+  imports the rule had always refused.
+
+**Open: `src/worker/cache.ts` still imports the barrel, and `cache.ts` runs on the main thread.** This
+is legal — `cache.ts` is in `worker` — but the rule is phrased per layer, so it cannot see that `worker`
+has a main-thread half. `client.ts`, `protocol.ts` and `response.ts` were moved onto the specific modules
+in this change; `cache.ts` cannot be, because it needs `TITLE_LENGTH`, which lives in `library.ts`.
+Nothing reaches it today: the shipped bundle contains no `DOMAIN_TAG`, `sha256`, `feistel` or `getPage`,
+because `src/main.ts` imports only `@engine/viewer` and neither `app/url.ts` nor the worker client is in
+the entry graph yet. The moment M6 wires `ui` to `@worker/client`, the barrel and `@noble/hashes` land in
+the main-thread bundle.
+
+The fix is the move this record already makes for `FORMAT_VERSION`: `TITLE_LENGTH` is a constant naming
+the format (SPEC §5), not generation, and belongs beside it — with one wrinkle `FORMAT_VERSION` did not
+have, in that `library.ts` derives `TITLE_SHIFT` from it and the move has to decide whether the
+derivation follows. It is left out because it is a second decision about a second constant and this
+record is already redrawing the central invariant.
+
+**And nothing mechanical will notice when M6 arrives.** The bundle claim above is a hand measurement
+with no guard behind it: `src/__tests__` holds three meta-tests and none of them asserts anything about
+what the built bundle contains, and the lint rule cannot help, because it is phrased per layer and
+`worker` has a main-thread half. So the detector is a person reading this paragraph. That is the same
+shape as ADR-0028's open question about test durations, and it wants an issue of its own rather than a
+sentence here.
+
+**Consequence.** `architecture.md` §1's claim about itself is true again, and it is true of eight blocks
+rather than five, under two rules rather than one. `src/app/url.ts` imports `@core/address`,
+`@core/errors` and `@core/format` instead of the barrel, and `src/worker/client.ts`, `protocol.ts` and
+`response.ts` name the modules they use for the same reason. Each case is asserted in both directions in
+`layer-boundaries.test.ts`, which grew from 20 tests to 100, and each rule was watched failing by deleting
+it from the config and running the file — the standard the roadmap sets for M0, applied to the rules that
+enforce the architecture itself. `.gitignore` gains the throwaway path that file writes, because its
+`afterAll` is the only thing that removes it and that does not run when a run is killed.
+
+---
+
 ## ADR-0030 — An interrupted flight retargets the playhead; the timeline is never rebuilt under it
 
 **Decision.** Interruption is settled by four rules, and the fourth is the only one that is not a
