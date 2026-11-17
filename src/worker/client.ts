@@ -544,7 +544,8 @@ export class GenerationClient {
 }
 
 /**
- * Create the worker this client drives.
+ * Create the worker this client drives, on the platform the application runs
+ * on.
  *
  * The `new Worker(new URL(...), { type: 'module' })` form is what Vite
  * recognises in order to build `./entry.ts` as a separate module graph
@@ -552,9 +553,42 @@ export class GenerationClient {
  * something the client does for itself so that the client stays constructible
  * without a `Worker` global, which is how `testing.md` §1 gets to test the
  * client without the thread.
+ *
+ * **It hands back an adapter rather than the `Worker` itself**, for the reason
+ * `GenerationWorkerLike` exists: a `Worker`'s `onmessage` takes a
+ * `MessageEvent`, which carries two dozen members this client never reads, and
+ * a handler written for the one member it does read is not assignable to it.
+ * The mapping is three lines because `postMessage` and the `message` event are
+ * the same two concepts on every platform the worker runs on — the Node thread
+ * in `__tests__/worker-thread.integration.test.ts` is adapted the same way.
  */
-export function createGenerationWorker(): Worker {
-  return new Worker(new URL('./entry.ts', import.meta.url), { type: 'module' });
+export function createGenerationWorker(): GenerationWorkerLike {
+  return new BrowserWorkerAdapter(
+    new Worker(new URL('./entry.ts', import.meta.url), { type: 'module' })
+  );
+}
+
+/** A `GenerationWorkerLike` over the platform's own `Worker`. */
+class BrowserWorkerAdapter implements GenerationWorkerLike {
+  onmessage: ((event: { readonly data: unknown }) => void) | null = null;
+  onerror: ((event: unknown) => void) | null = null;
+
+  constructor(private readonly worker: Worker) {
+    worker.onmessage = (event: MessageEvent): void => {
+      this.onmessage?.({ data: event.data });
+    };
+    worker.onerror = (event: unknown): void => {
+      this.onerror?.(event);
+    };
+  }
+
+  postMessage(message: unknown): void {
+    this.worker.postMessage(message);
+  }
+
+  terminate(): void {
+    this.worker.terminate();
+  }
 }
 
 function takePage(response: ResultResponse): Taken<string> {

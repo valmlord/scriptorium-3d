@@ -273,6 +273,58 @@ describe('layer boundaries', () => {
         'other layers may only be imported as types in @ui'
       );
     });
+
+    it('allows a runtime import of core address model', async () => {
+      // What M6's reader actually does: `PAGES_PER_BOOK` and
+      // `assertValidAddress` decide whether a page turn is possible, and both
+      // are integer arithmetic over five components (ADR-0029).
+      const violations = await lintInLayer(
+        'ui',
+        "import { assertValidAddress } from '@core/address';"
+      );
+      expect(violations).toHaveLength(0);
+    });
+
+    it('allows a runtime import of core domain errors', async () => {
+      const violations = await lintInLayer(
+        'ui',
+        "import { AddressBeyondLibraryError } from '@core/errors';"
+      );
+      expect(violations).toHaveLength(0);
+    });
+
+    it('rejects a runtime import of core generation', async () => {
+      const violations = await lintInLayer(
+        'ui',
+        "import { getPage } from '@core/library';"
+      );
+      expect(violations).toHaveLength(1);
+      expect(violations[0]?.message).toContain(
+        "core's generation surface may only be imported as types in @ui"
+      );
+    });
+
+    it('rejects a runtime import of the core barrel', async () => {
+      const violations = await lintInLayer(
+        'ui',
+        "import { getTitle } from '@core/index';"
+      );
+      expect(violations).toHaveLength(1);
+      expect(violations[0]?.message).toContain(
+        "core's generation surface may only be imported as types in @ui"
+      );
+    });
+
+    it('rejects a dynamic import of core generation', async () => {
+      const violations = await lintInLayer(
+        'ui',
+        "export const page = await import('@core/library');"
+      );
+      expect(violations).toHaveLength(1);
+      expect(violations[0]?.message).toContain(
+        "core's generation surface may not be imported dynamically in @ui"
+      );
+    });
   });
 
   describe('@worker layer', () => {
