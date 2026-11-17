@@ -155,12 +155,20 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build
-        run: npm run build
-
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium webkit
 
+      # `test:e2e` builds the site itself, in test mode, and then runs the
+      # suite against the output. The build is part of the script rather than a
+      # step of its own so that a local run and this job cannot differ, and so
+      # that neither can serve a bundle left over from an earlier build.
+      #
+      # Test mode rather than production because the suite asks the
+      # `window.__scriptorium` hook of testing.md section 7 where the
+      # application is, instead of sleeping on a duration, and that hook is
+      # stripped from a production build. What the production bundle contains
+      # is asserted in `src/__tests__/production-bundle.test.ts`, which the
+      # `verify` job runs, and `verify` builds the production bundle too.
       - name: Run e2e tests
         run: npm run test:e2e
 

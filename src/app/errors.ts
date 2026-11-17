@@ -194,3 +194,22 @@ export class UndecodableParameterError extends Error {
     this.value = value;
   }
 }
+
+/**
+ * `window.__scriptorium.frames()` was asked for the frame budget, which M10
+ * collects and M5's hook does not have.
+ *
+ * It refuses rather than returning a shape full of zeros: a frame-budget
+ * assertion that passes against a hook which never measured anything is worse
+ * than no hook at all, because it reports a budget as met. The milestone that
+ * owns the measurement is named in the message, so a test that hits this knows
+ * what it is waiting for.
+ */
+export class FrameTimingsUnavailableError extends Error {
+  constructor() {
+    super(
+      'Frame timings are not collected yet: the rolling frame budget arrives with M10 (roadmap M10), and this hook reports nothing rather than reporting zeros'
+    );
+    this.name = 'FrameTimingsUnavailableError';
+  }
+}
