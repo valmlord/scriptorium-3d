@@ -1803,11 +1803,13 @@ stated here and in the code.
 - A retreat is visible: backing out of a book and choosing another shelf flies up to the wall before
   it flies down again. That movement is the price of never snapping, and it is the user's own route
   played out rather than a path invented for them.
-- One frame of stillness remains at a rebuild boundary. The retreat's arrival is reported by gsap
-  inside a render, and the tween that continues the journey starts on the next one, so a rebuilt
-  flight pauses for about 16 ms at the level the two routes share. It is one frame at a point where
-  the camera is changing direction anyway, and the alternative is building the next leg before the
-  playhead has finished leaving the old one.
+- **A rebuilt flight does not stall at the level the two routes share**, which was worth measuring
+  rather than assuming. The retreat's arrival is reported by gsap inside a render, and the retarget
+  is computed in that same render, so the playhead is moving again on the very next frame: over 120
+  frames of a retreat-and-descend, **no two consecutive frames left the playhead at the same time**,
+  and the frames either side of the shared level are symmetric to six decimal places. The retreat's
+  ease out and the descent's ease in meet there, so the camera reads as changing direction rather
+  than as stopping. `__tests__/flight.test.ts` holds it.
 - Something has to own gsap's clock. A playhead tween is advanced by gsap's root timeline, and the
   root is advanced from the one `setAnimationLoop` through `src/motion/clock.ts`, which takes the
   root off gsap's own ticker. That is what keeps architecture §2's single loop true with gsap

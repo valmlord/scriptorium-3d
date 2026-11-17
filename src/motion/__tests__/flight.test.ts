@@ -401,6 +401,30 @@ describe('a route that disagrees with the one already built', () => {
     expectRigAt(flight.rig, OTHER_SHELF_POSE);
   });
 
+  it('does not stall at the level the two routes share', () => {
+    const flight = flightFromRoom();
+    flight.flyTo(ROUTE, 'shelf');
+    flyOn(flight);
+
+    flight.flyTo(OTHER_ROUTE, 'shelf');
+    const playhead: number[] = [];
+    for (let frame = 0; frame < MAX_FRAMES && !flight.isSettled; frame += 1) {
+      advanceMotionClockBy(FRAME_SECONDS);
+      playhead.push(flight.timeline.time());
+    }
+
+    // The retarget is computed inside the render in which the retreat arrives,
+    // so the playhead is moving again on the very next frame: the retreat's
+    // ease out and the descent's ease in meet at the shared level, and the
+    // camera reads as changing direction rather than stopping (ADR-0030).
+    const stalled = playhead.filter(
+      (time, index) => index > 0 && time === playhead[index - 1]
+    );
+    expect(playhead.length).toBeGreaterThan(60);
+    expect(stalled).toEqual([]);
+    expectRigAt(flight.rig, OTHER_SHELF_POSE);
+  });
+
   it('is not settled at a label whose level is no longer the one asked for', () => {
     const flight = flightFromRoom();
     flight.flyTo(ROUTE, 'shelf');
