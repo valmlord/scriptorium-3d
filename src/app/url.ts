@@ -1,11 +1,11 @@
 import {
-  FORMAT_VERSION,
   assertValidAddress,
   isCanonicalRoomName,
   roomFromName,
   roomToName,
-} from '@core/index';
-import type { Address } from '@core/index';
+} from '@core/address';
+import type { Address } from '@core/address';
+import { FORMAT_VERSION } from '@core/format';
 import {
   DuplicateUrlParameterError,
   NonNumericComponentError,

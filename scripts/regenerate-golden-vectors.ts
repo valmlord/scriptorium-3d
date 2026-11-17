@@ -28,7 +28,8 @@ import {
 } from '../src/core/address';
 import { PAGE_ALPHABET, digitToSymbol } from '../src/core/alphabet';
 import { intToDigits } from '../src/core/bignum';
-import { FORMAT_VERSION, getPage, getTitle, locate, search } from '../src/core/library';
+import { FORMAT_VERSION } from '../src/core/format';
+import { getPage, getTitle, locate, search } from '../src/core/library';
 import { DOMAIN_TAG, PRF_BYTES } from '../src/core/prf';
 import { ROUNDS } from '../src/core/feistel';
 import type { GoldenVectors } from '../src/core/__fixtures__/golden-vectors';

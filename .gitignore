@@ -4,6 +4,13 @@ dist-ssr/
 coverage/
 playwright-report/
 test-results/
+
+# Written by src/__tests__/layer-boundaries.test.ts into each layer directory and
+# into src/ itself, one set per process id, and removed in its afterAll -- which
+# does not run when a run is killed. A survivor fails `typecheck` on the next
+# run and fails the coverage gate against src/core/**, several steps from its
+# cause, and `git add -A` would commit it.
+src/**/__layer_boundary_test__.*.ts
 # Local tooling configuration. The engineering documentation it used to hold
 # now lives in docs/ and CONTRIBUTING.md, where a reader expects it.
 .claude/

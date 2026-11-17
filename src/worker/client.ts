@@ -1,5 +1,5 @@
-import { BOOKS_PER_SHELF, LIBRARY_SIZE, fromLinear } from '@core/index';
-import type { Address, BookAddress } from '@core/index';
+import { BOOKS_PER_SHELF, LIBRARY_SIZE, fromLinear } from '@core/address';
+import type { Address, BookAddress } from '@core/address';
 import { GenerationCache } from './cache';
 import {
   CancelledRequestError,

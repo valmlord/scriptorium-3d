@@ -3,22 +3,24 @@ import fc from 'fast-check';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
-  AddressBeyondLibraryError,
   BOOKS_PER_SHELF,
-  FORMAT_VERSION,
-  InvalidAddressError,
   LIBRARY_SIZE,
   PAGES_IN_LAST_ROOM,
   PAGES_PER_BOOK,
   ROOM_COUNT,
   SHELVES_PER_WALL,
-  UnknownSymbolError,
   WALLS_PER_ROOM,
   assertValidAddress,
   fromLinear,
   roomToName,
-} from '@core/index';
-import type { Address } from '@core/index';
+} from '@core/address';
+import type { Address } from '@core/address';
+import {
+  AddressBeyondLibraryError,
+  InvalidAddressError,
+  UnknownSymbolError,
+} from '@core/errors';
+import { FORMAT_VERSION } from '@core/format';
 import {
   SUPPORTED_LANGUAGES,
   addressToFragment,
