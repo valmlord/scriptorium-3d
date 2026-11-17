@@ -31,6 +31,8 @@ import { ResourceRegistry } from './resources';
 import { roomInstanceColor, roomInstanceMatrix } from './scratch';
 import { SPINES_PER_ROOM, occupiedSlotCount } from './slots';
 import { createFloorTexture } from './textures';
+import { createSpineTitleAtlas } from './titles';
+import type { SpineTitleAtlas } from './titles';
 
 /**
  * One room of the library, built from its address and nothing else.
@@ -69,6 +71,11 @@ export interface RoomHandle {
   readonly group: Group;
   /** The 640 volumes, as one instanced mesh. */
   readonly spines: InstancedMesh;
+  /**
+   * The titles on those spines, written a shelf at a time. Empty until the
+   * first shelf is resolved, and allocating nothing until then (`./titles.ts`).
+   */
+  readonly titles: SpineTitleAtlas;
   /** How many of the 640 slots hold a volume that exists (SPEC §3). */
   readonly occupiedSlots: number;
   /** What this room allocated on the device. */
@@ -90,14 +97,16 @@ export function createRoom(room: bigint): RoomHandle {
 
   group.add(createShell(registry));
   group.add(createShelfBoards(registry));
-  const spines = createSpines(room, occupiedSlots, registry);
+  const { spines, material } = createSpines(room, occupiedSlots, registry);
   group.add(spines);
   group.add(createLighting(registry));
+  const titles = createSpineTitleAtlas({ spines, material, registry });
 
   return {
     room,
     group,
     spines,
+    titles,
     occupiedSlots,
     resources: registry,
     dispose: () => {
@@ -207,18 +216,22 @@ function createShelfBoards(registry: ResourceRegistry): InstancedMesh {
  *
  * The material's own colour is white because three multiplies it into the
  * per-instance colour; anything else would tint all 640 bindings together.
+ * It is handed back beside the mesh because the title atlas patches it, and
+ * reading it off `InstancedMesh.material` would mean narrowing a union that
+ * this function already knows the answer to.
  */
 function createSpines(
   room: bigint,
   occupiedSlots: number,
   registry: ResourceRegistry
-): InstancedMesh {
+): { spines: InstancedMesh; material: MeshStandardMaterial } {
+  const material = registry.track(
+    new MeshStandardMaterial({ color: 0xffffff, roughness: 0.58, metalness: 0.02 })
+  );
   const spines = registry.track(
     new InstancedMesh(
       registry.track(new BoxGeometry(SPINE_WIDTH, SPINE_HEIGHT, SPINE_DEPTH)),
-      registry.track(
-        new MeshStandardMaterial({ color: 0xffffff, roughness: 0.58, metalness: 0.02 })
-      ),
+      material,
       SPINES_PER_ROOM
     )
   );
@@ -238,5 +251,5 @@ function createSpines(
   }
   spines.computeBoundingSphere();
 
-  return spines;
+  return { spines, material };
 }
