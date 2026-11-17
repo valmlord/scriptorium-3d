@@ -61,7 +61,7 @@ describe('the debug hook', () => {
     choreography.openVolume(TARGET);
     flyOn(choreography);
 
-    expect(hook?.state()).toEqual({ level: 'book', ...TARGET });
+    expect(hook?.state()).toEqual({ level: 'book', ...TARGET, page: 0 });
     expect(hook?.address()).toEqual({ ...TARGET, page: 0 });
     expect(hook?.rig().radial).toBeCloseTo(
       bookPose(TARGET.wall, TARGET.shelf, TARGET.volume).radial,
