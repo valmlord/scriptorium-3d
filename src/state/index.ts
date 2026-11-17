@@ -1,4 +1,4 @@
-// State layer exports
-// (Placeholder for M0 bootstrap)
+// State layer exports: the navigation finite state machine and its errors (M5).
 
-export {};
+export * from './errors';
+export * from './navigation';
