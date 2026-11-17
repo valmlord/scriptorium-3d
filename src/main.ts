@@ -11,12 +11,16 @@ import { createTitleResolver } from '@app/titles';
  * Entry point: mount the canvas, open the library at its first room, and join
  * the layers up.
  *
- * The order matters in three places. The choreography is built before the
+ * The order matters in four places. The choreography is built before the
  * viewer because the viewer asks for a rig on every frame it draws; the room
  * is loaded before the controls are installed because a pick needs something
- * to pick from; and the reader and the title resolver are given the one
- * generation client rather than one each, so a title drawn on a spine and the
- * page behind it come out of the same cache.
+ * to pick from; the reader and the title resolver are given the one generation
+ * client rather than one each, so a title drawn on a spine and the page behind
+ * it come out of the same cache; and the reader is built before the title
+ * resolver, so that it subscribes to the machine first. Both react to the same
+ * event and the worker answers in the order it was asked, so that subscription
+ * order is what puts the page somebody is waiting to read ahead of 32 titles
+ * for spines the camera is still flying towards.
  *
  * `frame` is the single point where time enters the application: the one
  * `setAnimationLoop` hands its timestamp here, the choreography advances gsap's

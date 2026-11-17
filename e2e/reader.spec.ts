@@ -49,10 +49,18 @@ const SPINES_PER_ROOM = 640;
 /** Frames to let pass before reading the draw-call probe. */
 const PROBE_FRAMES = 6;
 
+/** What an observer collected about one element. */
+interface WatchedElement {
+  /** The element's text, read once per batch of mutations delivered. */
+  texts: string[];
+  /** How many mutations it took: one per line element written. */
+  records: number;
+}
+
 declare global {
   interface Window {
-    /** Every text the reader's page element has held since the observer started. */
-    __readerTexts?: string[];
+    /** What each watched element has done, by the name the test gave it. */
+    __watchedTexts?: Record<string, WatchedElement>;
   }
 }
 
@@ -91,24 +99,43 @@ async function openFirstVolume(page: Page): Promise<Address> {
   return openAddress(page);
 }
 
-/** Record every text the reader's page element holds from now on. */
-function watchReaderText(page: Page): Promise<void> {
-  return page.evaluate((selector: string) => {
-    const article = document.querySelector(selector);
-    if (article === null) {
-      throw new Error('the reader is not mounted');
-    }
-    const texts: string[] = [];
-    window.__readerTexts = texts;
-    new MutationObserver(() => {
-      texts.push(article.textContent ?? '');
-    }).observe(article, { subtree: true, childList: true, characterData: true });
-  }, READER_PAGE);
+/**
+ * Watch what an element does from now on: the texts it holds, and how many
+ * mutations it took.
+ *
+ * The final state is not enough for either interruption scenario. A reader
+ * that wrote a page the machine had already left and then corrected itself
+ * ends up looking exactly like one that never wrote it, and the correction is
+ * usually in the same batch of microtasks — so the *texts* collapse to one
+ * entry and only the count of mutations distinguishes the two. 80 is one write
+ * of the grid; 160 is a page the machine was not on, followed by the page it
+ * was. Both scenarios were watched failing against a reader with the rule
+ * removed.
+ */
+function watchText(page: Page, selector: string, name: string): Promise<void> {
+  return page.evaluate(
+    (watched: { selector: string; name: string }) => {
+      const element = document.querySelector(watched.selector);
+      if (element === null) {
+        throw new Error(`nothing is mounted at ${watched.selector}`);
+      }
+      const collected: WatchedElement = { texts: [], records: 0 };
+      window.__watchedTexts = { ...window.__watchedTexts, [watched.name]: collected };
+      new MutationObserver((records) => {
+        collected.records += records.length;
+        collected.texts.push(element.textContent ?? '');
+      }).observe(element, { subtree: true, childList: true, characterData: true });
+    },
+    { selector, name }
+  );
 }
 
-/** The texts the reader has held since `watchReaderText`. */
-async function recordedTexts(page: Page): Promise<string[]> {
-  return (await page.evaluate(() => window.__readerTexts ?? [])) as string[];
+/** What a watched element has done since `watchText`. */
+function recorded(page: Page, name: string): Promise<WatchedElement> {
+  return page.evaluate(
+    (watched: string) => window.__watchedTexts?.[watched] ?? { texts: [], records: 0 },
+    name
+  );
 }
 
 test('the reader shows the 3200 characters of the page at that address', async ({
@@ -124,6 +151,11 @@ test('the reader shows the 3200 characters of the page at that address', async (
   expect(shown).toBe(getPage(address));
   expect(address.page).toBe(0);
   await expect(page.locator(`${READER_PAGE} p`)).toHaveCount(READER_ROWS);
+  // A book is entered at its first page (SPEC §6), and the first page has
+  // nowhere to turn back to: the controls are a projection of the address as
+  // much as the text is.
+  await expect(page.locator(PREVIOUS_PAGE)).toBeDisabled();
+  await expect(page.locator(NEXT_PAGE)).toBeEnabled();
 });
 
 test('the page is real text, which can be selected and copied', async ({ page }) => {
@@ -185,7 +217,8 @@ test('a page turn interrupted mid-flight leaves the machine and the view agreein
   page,
 }) => {
   const address = await openFirstVolume(page);
-  await watchReaderText(page);
+  await watchText(page, READER_PAGE, 'pages');
+  await watchText(page, READER_STATUS, 'status');
 
   // Two turns in one task, which is the only way to be sure the second lands
   // while the first is still being generated: the worker answers a page in
@@ -211,25 +244,38 @@ test('a page turn interrupted mid-flight leaves the machine and the view agreein
   await expect(page.locator(READER_STATUS)).toHaveText('Page 3 of 410');
   await expect(page.locator(READER_PAGE)).toHaveAttribute('aria-busy', 'false');
 
-  // And the superseded page was never shown. The request for it was cancelled
-  // and its reply, late or cached, changes nothing (ADR-0031).
-  const shown = await recordedTexts(page);
-  expect(shown).not.toContain(getPage({ ...address, page: 1 }));
-  expect([...new Set(shown)]).toEqual([getPage({ ...address, page: 2 })]);
+  // The view was written once, for the page the machine ended at, and the
+  // superseded page was never on screen. Its request was cancelled and a
+  // cancellation rejects (ADR-0016), so what has to change nothing here is a
+  // rejection naming a page the machine has already left.
+  const shown = await recorded(page, 'pages');
+  expect(shown.records).toBe(READER_ROWS);
+  expect(shown.texts).not.toContain(getPage({ ...address, page: 1 }));
+  expect(shown.texts.at(-1)).toBe(getPage({ ...address, page: 2 }));
+
+  // And it was never reported as a page that could not be generated, which is
+  // what a reader reading its own cancellation as a failure would have said
+  // for a moment on the way there.
+  for (const reported of (await recorded(page, 'status')).texts) {
+    expect(reported).not.toContain('could not be generated');
+  }
 });
 
 test('a turn superseded by a cached page writes nothing to the view', async ({
   page,
 }) => {
   const address = await openFirstVolume(page);
-  // Both pages are in the client's cache after this, so both replies resolve
-  // inside the task that asks for them rather than after a round trip.
+  // Page 0 and page 1 are both in the client's cache after this, and the
+  // reader is on page 1. A cached page resolves inside the task that asks for
+  // it and has nothing left to cancel, so this is the one case cancellation
+  // cannot answer (ADR-0031).
   await page.locator(NEXT_PAGE).click();
   await waitForIdle(page);
-  await page.locator(PREVIOUS_PAGE).click();
-  await waitForIdle(page);
-  await watchReaderText(page);
+  await watchText(page, READER_PAGE, 'pages');
 
+  // Back to page 0 and forward to page 1 again, in one task. Page 0's reply
+  // resolves while the machine is at page 1, which is exactly the reply that
+  // has to change nothing.
   await page.evaluate(
     (selectors: { next: string; previous: string }) => {
       const next = document.querySelector(selectors.next);
@@ -240,23 +286,23 @@ test('a turn superseded by a cached page writes nothing to the view', async ({
       if (!(previous instanceof HTMLButtonElement)) {
         throw new Error('the reader has no previous-page control');
       }
-      next.click();
-      next.click();
       previous.click();
+      next.click();
     },
     { next: NEXT_PAGE, previous: PREVIOUS_PAGE }
   );
 
   await waitForIdle(page);
 
-  // Three turns, two of them superseded by replies that resolve inside the
-  // task that asked for them, because those pages are in the client's cache.
-  // The only text the view ever held is the page the machine ended at.
   const reached = await openAddress(page);
   expect(reached.page).toBe(1);
-  expect([...new Set(await recordedTexts(page))]).toEqual([
-    getPage({ ...address, page: 1 }),
-  ]);
+  // One write of the grid and not two: page 0's reply arrived, and the view
+  // did not take it. Both replies resolve in the same batch of microtasks, so
+  // the text alone cannot tell the two readers apart (see `watchText`).
+  const shown = await recorded(page, 'pages');
+  expect(shown.records).toBe(READER_ROWS);
+  expect(shown.texts.at(-1)).toBe(getPage({ ...address, page: 1 }));
+  expect(await readerContent(page)).toBe(getPage({ ...address, page: 1 }));
 });
 
 test('closing the reader leaves the book, and the text with it', async ({ page }) => {

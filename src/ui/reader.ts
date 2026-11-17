@@ -196,10 +196,10 @@ export function createReader(options: ReaderOptions): Reader {
   };
 
   const onPrevious = (): void => {
-    turnTo((open?.page ?? 0) - 1);
+    turnBy(-1);
   };
   const onNext = (): void => {
-    turnTo((open?.page ?? 0) + 1);
+    turnBy(1);
   };
   const onClose = (): void => {
     navigation.dispatch({ type: 'back' });
@@ -384,10 +384,22 @@ export function createReader(options: ReaderOptions): Reader {
     }
   }
 
-  /** Dispatch a turn to `wanted`, if that page of this volume exists. */
-  function turnTo(wanted: number): void {
+  /**
+   * Dispatch a turn `step` pages from the page the machine has open, if there
+   * is such a page.
+   *
+   * The page it turns from is the machine's and not the one on screen, which
+   * is the same rule as everywhere else here: two clicks inside one task turn
+   * two pages, because the first dispatch has already moved the machine by the
+   * time the second is read (ADR-0031).
+   */
+  function turnBy(step: number): void {
     const here = open;
-    if (here === null || !pageExists(here, wanted)) {
+    if (here === null) {
+      return;
+    }
+    const wanted = here.page + step;
+    if (!pageExists(here, wanted)) {
       return;
     }
     navigation.dispatch({ type: 'turn-page', page: wanted });

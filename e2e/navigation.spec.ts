@@ -7,7 +7,12 @@ import {
   hookRig,
   waitForIdle,
 } from './debug-hook';
-import { CURSOR_OVER_VOLUME, cursorOnCanvas, pointsOverVolumes } from './spines';
+import {
+  CURSOR_OVER_VOLUME,
+  clickFirstVolume,
+  cursorOnCanvas,
+  findVolume,
+} from './spines';
 
 /**
  * M5's end-to-end scenario: the room is a place you move through.
@@ -60,9 +65,9 @@ test('the pointer tells a volume from the fabric of the room', async ({ page }) 
   const box = await canvas.boundingBox();
   expect(box).not.toBeNull();
 
-  const overVolumes = await pointsOverVolumes(page);
+  const overVolume = await findVolume(page);
 
-  expect(overVolumes.length).toBeGreaterThan(0);
+  expect(overVolume).not.toBeNull();
   // And the ceiling is not a book: a hover that answered "yes" everywhere
   // would pass the assertion above and mean nothing.
   await page.mouse.move(
@@ -85,12 +90,7 @@ test('clicking a volume flies to it, and Escape flies back', async ({ page }) =>
 
   await page.goto('/');
   await waitForIdle(page);
-  const [target] = await pointsOverVolumes(page);
-  expect(target).toBeDefined();
-
-  await page.mouse.move(target?.x ?? 0, target?.y ?? 0);
-  await page.mouse.down();
-  await page.mouse.up();
+  await clickFirstVolume(page);
   await waitForIdle(page);
 
   // One click from the room level descends the whole ladder: the wall, then

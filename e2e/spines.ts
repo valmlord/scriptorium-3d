@@ -32,20 +32,17 @@ export function cursorOnCanvas(page: Page): Promise<string> {
   });
 }
 
-/** Every point of a scan over the canvas where the pointer is over a volume. */
-export function pointsOverVolumes(page: Page): Promise<CanvasPoint[]> {
-  return scanForVolumes(page, false);
-}
-
 /**
- * The first point of the scan that is over a volume.
+ * The first point of a scan over the canvas that is over a volume.
  *
- * Stops there, which is the difference that matters to the suite's running
- * time: the full scan is 63 pointer moves and 63 round trips to the page, and
- * every scenario that only needs *a* book pays it otherwise.
+ * It stops there, and nothing in the suite needs the whole scan: the scenarios
+ * that find a spine need *a* spine, and one that found every one of them paid
+ * 63 pointer moves and 63 round trips to the page for the 62 it discarded.
+ * Under the default worker count that was two scenarios of M5 timing out while
+ * five pages shared the machine.
  */
 export async function findVolume(page: Page): Promise<CanvasPoint | null> {
-  const [first] = await scanForVolumes(page, true);
+  const [first] = await scanForVolumes(page);
   return first ?? null;
 }
 
@@ -61,10 +58,7 @@ export async function clickFirstVolume(page: Page): Promise<void> {
   await page.mouse.up();
 }
 
-async function scanForVolumes(
-  page: Page,
-  stopAtFirst: boolean
-): Promise<CanvasPoint[]> {
+async function scanForVolumes(page: Page): Promise<CanvasPoint[]> {
   const canvas = page.locator('canvas#canvas');
   const box = await canvas.boundingBox();
   expect(box).not.toBeNull();
@@ -82,9 +76,7 @@ async function scanForVolumes(
         continue;
       }
       found.push({ x, y });
-      if (stopAtFirst) {
-        return found;
-      }
+      return found;
     }
   }
   return found;
