@@ -2235,3 +2235,96 @@ tightening it to 93 are in that record's answered question, and it is not done h
 recalibrated on the run that moved its floor is the ADR-0013 mistake. And the upstream report — that
 a Vitest run in which no test ran at all is reported as a survival — is written down for a Stryker
 issue and acted on from the test side only.
+
+---
+
+## ADR-0031 — A page turn is ADR-0030's interruption model, with the DOM in the place of the rig
+
+**Decision.** Page turning reuses ADR-0030 rather than answering interruption a second time. The
+correspondence is written out here because it is not quite term for term, and the one rule of
+ADR-0030 that has nothing to do in a reader is named rather than left to be noticed:
+
+| ADR-0030, the camera                                  | M6, the reader                                      |
+| ----------------------------------------------------- | --------------------------------------------------- |
+| The machine commits on the event                      | The machine commits on the event                    |
+| The rig is a pure function of the playhead            | The DOM is a pure function of the machine's address |
+| An interruption kills the playhead tween, never a leg | An interruption cancels the request, never a write  |
+| A route disagreement retreats to the last shared stop | Nothing to retreat from: a turn has no stops        |
+
+1. **The machine commits on the event.** The instant a turn is accepted the FSM is at the new page
+   and `addressOf` names it. There is no "turning" state, for the reason ADR-0030 gives for there
+   being no "flying" state: the overlays and the URL are projections of the machine
+   (`architecture.md` §4), so a second event arriving mid-turn would be read against a page the
+   user has already left.
+2. **The view is written only while the machine has that page open.** That single line in
+   `src/ui/reader.ts` is what makes an interrupted turn safe, and it is ADR-0030's second rule with
+   the DOM in the place of the rig: the 80 line elements are a function of the machine's address
+   and of nothing else — not of which reply arrived first, not of whether a page was cached.
+3. **An interruption cancels the request in flight and issues another.** It never writes part of a
+   page and never writes a reply the machine has moved past. `GenerationRequest.cancel()` is what
+   stops the worker computing a page nobody is waiting for (ADR-0016), and the rule above is what
+   makes the reply that was already in flight a non-event.
+
+**Why rule 4 is vacuous here, and why that is not a loosening.** A flight's route is a path through
+rig space with the levels standing on it, so two routes that disagree have a last point in common,
+and the playhead has to come back to it before what hangs below can be replaced — that is ADR-0030's
+retreat. A page turn has no such path. There are two pages in the question, the one on screen and
+the one asked for, and the thing that would be "rebuilt under a moving playhead" is a single write
+of 80 line elements, which either happens or does not. The last stop the old and the new turn still
+agree on is the page already on screen, and the reader is standing exactly there: it keeps showing
+it until the new page has arrived whole. So the retreat has nothing to do, rather than being skipped.
+
+**Why the turn is not a timeline.** It could be. A page could slide across the panel, and then the
+lag would be a movement, the playhead would be the thing interrupted, and ADR-0030 would apply
+literally and without a word of this record. It is not a timeline because the lag in a page turn is
+not a movement but a generation: 1.0 to 2.3 ms of worker time on the four machines of ADR-0005, with
+nothing to interpolate between the old page and the new one. `@ui` may not import `gsap` either
+(`architecture.md` §1, ADR-0004), so an animated turn is a `@motion` timeline driven from `@app` —
+which is where it goes if M10 adds one, and this record does not change when it does.
+
+**Why the event names a page and not a direction.** Every other event in the table names where to go
+(`select-wall`, `select-shelf`, `select-volume`), and a `turn-page` carrying a delta would be the one
+that does not. It also moves the arithmetic into the machine: the component `core` validates would be
+one the caller never saw, so a refusal would name a page nobody asked for. The reader computes
+`page + 1` from `addressOf` and the machine refuses it or does not, which is the same shape as a
+click on a spine.
+
+**What consistency means here, precisely.** At every instant: the machine names a page, the reader
+shows a page it has received whole, and `aria-busy` on the page element says whether those two are
+the same. The machine and the view may disagree about **which page is on screen**, because that
+disagreement is what a generation is. They may not disagree about **which page is being opened**.
+
+**The superseded reply is not a hypothetical.** It is the ordinary case of turning back and forth: a
+page the client has already cached resolves inside the same task as the turn that asked for it
+(`cache.ts` is read before the boundary, ADR-0005), so two turns dispatched together produce two
+replies that land in the order the user did not ask for, and cancellation cannot help — a resolved
+promise has nothing left to cancel. `e2e/reader.spec.ts` holds both cases: a turn interrupted while
+the worker is still generating, and a turn superseded by a cache hit in its own task.
+
+**Alternatives rejected.**
+
+- _Queue the turns and apply them one at a time._ The reader then keeps opening pages the user has
+  already left, and the queue becomes a second record of where the user is going, which is what
+  `architecture.md` §4 exists to forbid. ADR-0030 rejected the same thing for the camera.
+- _Blank the page while a turn is in flight._ Every turn flickers, and an interrupted turn leaves an
+  empty reader. `aria-busy` and the status line report the same fact without taking the text away.
+- _Write the lines as they arrive._ There is nothing to stream: a page is one `getPage` and arrives
+  whole. A partially written page is 3200 characters that exist at no address, which is this
+  project's definition of the wrong kind of wrong.
+- _Render the page to a canvas and animate that._ The milestone is that the text is real DOM text,
+  selectable and readable by a screen reader (SPEC §8). A texture is the thing being replaced.
+
+**Consequence.**
+
+- `waitForIdle()` grows from the camera to four sources: the flight, the worker client's request
+  table, the reader, and the title resolver (`docs/testing.md` §7). The composition is
+  `src/app/idle.ts`, and the property that needed a test is that one pass over the sources is not
+  an answer — a page arriving leaves the client quiet and the reader writing.
+- The same rule serves the spine titles: a shelf of titles that arrives for a shelf the machine has
+  left changes nothing. Neither the reader nor the title resolver inspects an error class to tell a
+  cancellation from a failure, because the question "is this still what the machine is asking for"
+  answers both.
+- A turn whose page genuinely fails to generate leaves the last page on screen and says so in the
+  status line. That branch is not reachable from the interface in M6 — every address the machine
+  produces is valid and the worker answers every message exactly once — so it carries no test, and
+  that is stated here rather than implied by its absence.

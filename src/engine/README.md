@@ -9,6 +9,10 @@ Three.js scene and rendering. Low-level mesh manipulation, rendering loop, camer
 - Camera and rig logic
 - The render loop: exactly one `setAnimationLoop`
 - Geometry and material setup
+- The spine title atlas: `atlas.ts` is its geometry and its row-per-shelf bookkeeping, as arithmetic
+  with no browser in it; `titles.ts` is the canvas, the texture and the three lines of patched shader
+  that read it at a per-instance offset. It allocates nothing until the first shelf of titles
+  arrives, so a room nobody has read a spine of is the mesh M4 built
 
 ## What cannot be imported
 

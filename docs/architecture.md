@@ -98,6 +98,8 @@ stays silent. A lint rule nobody has watched fail is not a rule.
 ## 3. The scene
 
 - Books are **instanced**. 640 spines to a room is one `InstancedMesh` and one draw call, never 640 meshes.
+  A spine carries its own title through a per-instance offset into one canvas atlas, so the draw call
+  count does not grow with the number of shelves that have acquired titles (M6, `engine/titles.ts`).
 - Per-instance appearance is derived deterministically from the address, never from `Math.random()` —
   otherwise a room looks different each time it is entered, and the library stops being a place.
 - Textures and geometries are disposed when a room is unloaded. WebGL memory is not garbage collected.
@@ -110,6 +112,9 @@ stays silent. A lint rule nobody has watched fail is not a rule.
   and the overlays are **projections** of it, never independent copies.
 - Transitions are explicit and total: an unhandled `(state, event)` pair throws in development instead of
   being silently ignored.
+- The open **page** is a component of the `book` state rather than a fifth level, because a turn moves no
+  camera (SPEC §6). Turning is interruptible, and it is interruptible by ADR-0030's rules with the DOM in
+  the place of the camera rig rather than by a second model of its own (ADR-0031).
 - The URL is written from the FSM and parsed into it. No other code touches `location`.
 
 ## 5. Determinism

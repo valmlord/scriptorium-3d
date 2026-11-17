@@ -206,6 +206,12 @@ Mandatory scenarios, each one owned by the milestone that introduces it:
 9. A volume chosen with the pointer is flown to, through every level between, and `Escape` flies
    back up the same way. The pointer tells a volume from the fabric of the room before it is
    clicked, and the room's own vantage is where the way back ends.
+10. The reader shows the 3200 characters the library holds at that address, as selectable text; a
+    title on screen is `getTitle` of that volume; a page turn interrupted mid-flight leaves the FSM
+    and the view agreeing, and the superseded page is never shown; and the 640 spines are still one
+    instanced draw call once a shelf has acquired its titles. The expected text is computed by
+    `core` inside the spec, so these assert the bijection rather than the reader agreeing with
+    itself.
 
 **No pixel-diff screenshots of the WebGL canvas.** GPU and driver differences make them flake, and a flaky
 test trains everyone to ignore red. Assert on the scene's _state_ instead — see §7. Screenshots of DOM
@@ -244,8 +250,21 @@ a debug hook that lies is worse than one that is absent.
 **`waitForIdle()` is composed, not owned.** It resolves when every source of pending work the
 composition knows about is idle. In M5 that is the camera flight: the playhead has arrived at the
 label for the level the FSM is at, and no playhead tween is running (ADR-0030 explains why the label
-alone is not enough). From M6 the worker client's `pendingCount` joins it, through the composition in
-`src/main.ts` rather than through a second opinion held inside the hook.
+alone is not enough). From M6 there are four, joined by `src/app/idle.ts` and listed in
+`src/main.ts` rather than by a second opinion held inside the hook:
+
+1. the camera flight, as above;
+2. the worker client's request table, which reports an empty table as an event rather than leaving
+   a test to poll `pendingCount`;
+3. the reader, which is idle when the page in the DOM is the page the FSM says is open and nothing
+   is in flight for it — the client going quiet is not the same statement, because a page arriving
+   leaves the client with nothing to do and the reader with 80 lines to write;
+4. the title resolver, because a shelf of 32 titles is generated work a test has every reason to
+   wait for, and the flight arriving at a shelf is what starts it.
+
+**One pass over those four is not an answer**, which is the one property of the composition worth a
+test: settling one source can make another busy, so `whenAllIdle` re-reads the list after every
+settlement (`src/app/__tests__/idle.test.ts`).
 
 ## 8. Coverage thresholds
 
