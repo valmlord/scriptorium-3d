@@ -190,6 +190,25 @@ describe('the master timeline', () => {
     }
   });
 
+  it('begins each leg where the route says, not where the rig happened to be', () => {
+    const flight = flightFromRoom();
+    flight.flyTo(ROUTE, 'book');
+
+    // Something writes the rig between the route being built and the timeline
+    // first rendering. A `to()` leg records its start values at that first
+    // render and would bake this in, which is the whole reason the legs are
+    // `fromTo`: what a leg means has to be the route's business and not the
+    // rig's state at an arbitrary moment (ADR-0030).
+    flight.rig.height = 99;
+    flight.rig.bearing = -99;
+
+    flight.timeline.seek('wall');
+    expectRigAt(flight.rig, WALL_POSE);
+    flight.timeline.seek('room');
+
+    expectRigAt(flight.rig, ROOM_POSE);
+  });
+
   it('is a function of the playhead alone, whatever order it is read in', () => {
     const flight = flightFromRoom();
     flight.flyTo(ROUTE, 'book');
