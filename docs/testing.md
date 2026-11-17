@@ -58,37 +58,56 @@ codebase that gap is the whole risk. Stryker runs against `src/core` only:
 - `npm run test:mutation`, configured in `stryker.config.json`.
 - Thresholds: **`high` 93, `low` 92, `break` 92**, calibrated on the measured run-to-run spread
   rather than chosen as round numbers (ADR-0018). `break` is the only one that decides the exit
-  code.
+  code. The floor is **96.07** since ADR-0031, so `break` now tolerates 25 survivors more than the
+  floor rather than ADR-0018's eleven; whether to tighten it to 93 is the open question at the end
+  of that record.
 - **Nightly on `main`, and on demand** via `workflow_dispatch` — not on pushes or pull requests.
-  ADR-0014 took it off that path when a run cost 21 to 70 minutes. Since ADR-0017 a run is about ten
-  minutes, so that reason has largely gone; it has not been reinstated as a pre-merge gate because
-  the ten minutes is one measurement on one developer machine and every CI duration on record
-  predates the upgrade. That is the open question ADR-0014 now names.
+  ADR-0014 took it off that path when a run cost 21 to 70 minutes. It is now **6m17s to 15m04s on
+  `ubuntu-latest`** over twenty runs under 9.6.1 — thirteen nightly ones at 9m59s to 15m04s and
+  seven `workflow_dispatch` ones at 6m17s to 10m22s (ADR-0031) — so the reason it left that path has
+  gone. Whether to put a seven-to-fifteen-minute job back on every pull request is still ADR-0014's
+  question; what has changed is that it is no longer being argued from one developer machine.
 - The pull request path runs `npm run test:mutation:dry` instead: Stryker's dry run, a 34-second job
   that adds nothing to the critical path, which answers the one question a pull request can answer
   cheaply — does the harness still start, instrument and get a green suite? It asserts the test
   count as well as the exit code, because a broken dry run was observed reporting success on 43 of
   229 tests.
 
-If a surviving mutant turns out to be genuinely equivalent, it is excluded with a comment explaining why.
-Silently lowering the threshold is not an option.
+If a surviving mutant turns out to be genuinely equivalent, it is excluded with a comment explaining
+why. Silently lowering the threshold is not an option. One survivor is equivalent and deliberately
+_not_ excluded: `address.ts:30`, where `+ 1n` for `- 1n` in the room-count ceiling cannot change the
+quotient for this library. `// Stryker disable` is per line and per mutator, so excluding it would
+take two killed mutants with it; the arithmetic is written out in ADR-0031 instead.
 
-**The score moves by about two tenths of a point between runs, and a named survivor is a claim.**
-Eight full runs of unchanged `main` span 0.49 points, and two runs of the identical commit
-`e43d09b`, launched concurrently, scored 93.10 and 93.27. The score is a pure function of the
-survivor count, so that whole spread is three survivors (ADR-0018).
+**The score moves by a few survivors between runs, and a named survivor is a claim.** Thirteen
+nightly runs of the identical commit `ff005f10` scored 94.75 to 95.57 on `ubuntu-latest`, which is
+27 to 32 survivors, in 9m59s to 15m04s. Eight full runs of `6786120` spanned 0.49 points before
+that (ADR-0018). The score is a pure function of the survivor count, so the whole spread is a
+handful of mutants whose verdict flips between `Killed`, `Timeout` and `Survived` — and the flipping
+is one-sided in the direction that matters: it adds survivors, it does not remove one.
 
 An earlier version of this section reported a five-point swing and called the verdict
 irreproducible. It was wrong: the swing was caused by `d2aa600` raising `testTimeout` from 5 s to
 30 s, and a timing-out test is a failing test that kills its mutant for the wrong reason. The
 correction, with the mechanism, is at the end of ADR-0014. The scores before that commit were
-inflated; `~93` is the honest number.
+inflated; `~93` was the honest number for the suite as it then stood, and the suite has gained tests
+since. ADR-0031 has the current figures.
 
-Before acting on a named survivor, apply the mutation to the file by hand and run the suite — not
-because the report lies, but because the property tests run at 10 cases under Stryker and 1000
-everywhere else (ADR-0012), so a survivor may be one that 1000 cases would have killed. This is
-issue #6, and it is open. `break` has since been set from that measurement (ADR-0018); what remains
-is whether the residual fraction of a point survives on a second machine.
+Before acting on a named survivor, apply the mutation to the file by hand and run the suite. There
+are two reasons, and the first is that the report can be wrong. A mutant that makes a module _body_
+throw takes down every test file that imports it; a file that fails to collect contributes no
+failing test, only a failing file; and Stryker decides a mutant survived when no test failed. So it
+reads an empty result set and calls the mutant a survivor. Eight mutants were reported that way in
+every one of those thirteen runs, and the suite kills all eight (ADR-0031, issue #6). The second
+reason is the case count: property tests run at 10 cases under Stryker and 1000 everywhere else
+(ADR-0012), so a survivor may be one that 1000 cases would have killed.
+
+The first of those is now checked rather than remembered. `npm run test:mutation` runs
+`scripts/check-mutation-report.ts` afterwards, and it fails the run when a survivor completed fewer
+tests than its run plan named — a static mutant runs the whole suite, any other mutant runs the
+tests that cover it, and a shortfall means the files that would have failed never collected. A
+survivor that passes that check ran everything it was asked to run, which is what makes it a claim
+worth acting on.
 
 `src/core` yields close to 600 mutants, so the property tests are capped at 10 cases under Stryker
 alone (`src/core/__tests__/property-runs.ts`, ADR-0012). Fewer cases can only let a mutant _survive_

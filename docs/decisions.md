@@ -886,6 +886,28 @@ tightened on that evidence. It is recorded as a question rather than acted on be
 depend on the answer, and because tightening a gate on a spread measured elsewhere is the move this
 record exists to stop. Issue #6 carries it.
 
+**Answered: it still drifts, and by more than this record measured.** Thirteen nightly runs of the
+identical commit `ff005f10` on `ubuntu-latest` under 9.6.1 — one a night, so each on its own runner
+and none competing with the other twelve — scored **94.75 to 95.57**: 27 to 32 survivors, a spread
+of **five** against the three measured here, in 9m59s to 15m04s. The whole spread is five mutant
+positions, and they are nameable: `bignum.ts:56` (two mutants), `bignum.ts:115`, `bignum.ts:116` and
+`address.ts:30` are survivors in some of the thirteen runs and not in others, while the remaining 27
+survivors are in every one. `address.ts:30` is an equivalent mutant (ADR-0031), so no test can kill
+it and its other verdict can only have been a timeout — a kill for the wrong reason, which is the
+same one-sided noise ADR-0014's correction describes, pointing the other way.
+
+So the premise for tightening is gone: the upgraded runner did not remove the spread, and `break: 92`
+stands on a measurement of the machine that enforces it rather than on one machine's flat run.
+
+ADR-0031 then raised the floor by eight survivors, which is 1.31 points, by killing survivors that
+were never real. At a floor of 24 survivors, `break: 92` fires at 49 and so tolerates 25 extra
+against a measured spread of five — about five times it, where this record chose about four. The
+arithmetic is unchanged and so is the decision; what has changed is that the margin is now five
+spreads rather than four, and tightening it to 93 (43 survivors, 19 extra) would land back on this
+record's own ratio. Not done here: the floor moved in the same commit that would move the gate, and
+a gate recalibrated on the run that changed it is the ADR-0013 mistake. The figures to do it on are
+in ADR-0031.
+
 ---
 
 ## ADR-0019 — The worker cache is budgeted in bytes, separately for pages and titles
@@ -1239,6 +1261,15 @@ to Stryker is whether the hybrid case deserves its own option. Recorded rather t
 the workaround costs nothing a reader is not already told to do, and because patching the planner
 locally would make this project's score incomparable with its own history. Issues #6 and #25 carry
 the six named mutants.
+
+**Answered from the test side, and the question turned out to be the wrong one (ADR-0031).** The six
+do not have to be run on their covering tests at all. They are reported as survivors because the
+test files that notice them fail to _collect_, so the run contains no failing test for Stryker to
+read — not because static activation does not reach them. A test file that imports nothing from
+`core` at the top still collects, and evaluating the module body inside a test turns the throw into
+a failing test. The six are killed with `ignoreStatic` off, the planner untouched, and all 610
+mutants still scored. What is left for upstream is narrower and worth reporting on its own: a Vitest
+run in which no test ran at all is reported as a survival.
 
 ---
 
@@ -2025,3 +2056,181 @@ stated here and in the code.
   root is advanced from the one `setAnimationLoop` through `src/motion/clock.ts`, which takes the
   root off gsap's own ticker. That is what keeps architecture §2's single loop true with gsap
   installed, and it is also why no test in `src/motion` waits on a wall clock.
+
+---
+
+## ADR-0031 — A mutant that breaks a module body is killed by a test that imports it from inside
+
+**Decision.** `src/core/__tests__/module-load.test.ts` imports nothing from `core` at the top and
+evaluates each module body inside a test, asserting what that body builds. The eight mutants issue
+#6 is about are killed by it. `scripts/check-mutation-report.ts` then refuses any report whose
+survivors ran fewer tests than their run plan named, so the class of false survival this record is
+about cannot be reported as a pass again. `ignoreStatic` stays off (ADR-0023), `coverageAnalysis`
+stays `perTest`, the planner is untouched, and no mutant leaves the scored set.
+
+**Two corrections first, because issue #6 names a mechanism the measurement refutes.**
+
+The issue says the mutant "never takes effect": that the Vitest runner assigns `ns.activeMutant` at
+the setup file's module-load time, by which point the mutated modules are already instantiated and
+cached, so every test passes and Stryker records `Survived`. If that were what happened, the mutant
+run would report a full green suite of 250 tests.
+
+It is the reverse. Static activation works exactly as intended. `mutant-test-planner.js` plans these
+mutants with `testFilter: undefined` — `globalTestFilter` is undefined unless the `testFiles` option
+is set, and this project does not set it — so `mutantActivation` is `'static'` and
+`stryker-setup.js` assigns `ns.activeMutant` while the setup file loads, before any test module is
+imported. The mutant is live while `core` is being imported and it does precisely what it says: each
+of these eight makes a module body throw. The report even says so, in a field nobody was reading.
+Of the 250 tests their run plan named, `alphabet.ts`'s four completed **1**, `prf.ts`'s two **104**
+and `address.ts`'s two **53**.
+
+The second correction: `break: 75` and `low: 85`, the thresholds the issue reasons about, are gone
+(ADR-0018), and `feistel.ts:35`, the fifth mutant it names, is killed in all thirteen nightly runs
+of `ff005f10` and in every one of the thirteen runs taken below. `addMod` is reached at runtime by the whole bijection
+suite, so mutating it fails 62 tests rather than breaking an import; it was a false survivor only
+while the dry run had no timeout anyone chose (ADR-0012's "third budget").
+
+**What the suite does with each of them.** Each mutation applied to the file by hand, then
+`vitest run --config vitest.stryker.config.ts` on `08d7700` — the same suite and the same
+environment Stryker runs it in:
+
+| mutant                                               | verdict      | what the suite does                        |
+| ---------------------------------------------------- | ------------ | ------------------------------------------ |
+| `alphabet.ts:48` `i <= symbols.length`               | **killed**   | 9 of 10 files fail to collect, 1 test runs |
+| `alphabet.ts:48` `i--`                               | **killed**   | 9 of 10 files fail to collect, 1 test runs |
+| `alphabet.ts:50` `if (true)`                         | **killed**   | 9 of 10 files fail to collect, 1 test runs |
+| `alphabet.ts:50` `symbol !== undefined`              | **killed**   | 9 of 10 files fail to collect, 1 test runs |
+| `prf.ts:98` `if (true)`                              | **killed**   | 5 files fail to collect, 104 tests run     |
+| `prf.ts:98` `code <= 0x7f`                           | **killed**   | 5 files fail to collect, 104 tests run     |
+| `address.ts:25` `BOOKS_PER_SHELF / PAGES_PER_BOOK`   | **killed**   | 7 files fail to collect, 53 tests run      |
+| `address.ts:25` `SHELVES_PER_WALL / BOOKS_PER_SHELF` | **killed**   | 7 files fail to collect, 53 tests run      |
+| `address.ts:30` `BigInt(PAGES_PER_ROOM) + 1n`        | **survives** | the whole suite passes                     |
+
+Every killed row has **zero failing tests**. The suite is red on failing _files_, and a failing file
+is not what Stryker reads.
+
+**Why the report cannot see it.** `vitest-test-runner.js` builds its result from leaf test tasks
+that carry a result:
+
+```js
+const tests = this.ctx.state
+  .getFiles()
+  .flatMap((file) => collectTestsFromSuite(file))
+  .filter((test) => test.result);
+let failure = false;
+const testResults = tests.map((test) => {
+  /* ... */ failure ||= testResult.status === TestStatus.Failed;
+});
+if (!failure && this.ctx.state.errorsSet.size > 0) {
+  return { status: DryRunStatus.Error /* ... */ };
+}
+return { tests: testResults, status: DryRunStatus.Complete };
+```
+
+A test file whose import throws registers **no tasks at all**, so it contributes no failing test,
+and a file's own `result` is never read; `collectTestsFromSuite` returns `task.type === 'test'` and
+nothing else. Vitest keeps a collection error on the file task, while `errorsSet` carries unhandled,
+teardown, source and reporter errors, so that escape hatch does not fire either. The runner returns
+`Complete` with an empty, failure-free test list, and Stryker's rule — a mutant survived when no test
+failed — then reads a red suite as a survival.
+
+**The check that makes it unrepeatable.** A survivor is a claim that a mutant ran its tests and none
+of them minded, so the test count is part of the claim: a static mutant is planned with no test
+filter and runs every test in the dry run, and any other mutant runs the tests that cover it. A
+survivor that completed fewer than that did not survive anything. `scripts/check-mutation-report.ts`
+asserts exactly that over the `json` report and fails the run on a shortfall. Over the ten reports
+it has been run on — the six taken on the laptop below, and the four `ubuntu-latest` runs of this
+branch, where the job runs it itself — it names the eight in each of the three reports taken from
+`main` and nothing in the other seven: 264 survivor observations, and every survivor other than
+those eight, static and runtime alike, completed its planned count to the test. It is the same shape as
+`scripts/check-mutation-harness.sh` asserting the dry run's test count, and for the same reason: a
+truncated run that reads as a pass is the failure this repository keeps finding (ADR-0014).
+
+**The fix.** A test file that imports nothing from `core` still collects when a `core` module body
+throws, and a dynamic `import()` inside a test body runs that body where a throw is a _failing test_.
+One test imports the barrel, so it covers every module including ones added after this record; the
+rest assert the values the bodies build, so each test fails for the right reason rather than merely
+observing that an import resolved. The constants are asserted in `address.test.ts`, `prf.test.ts` and
+`alphabet.test.ts` too, and that duplication is the point: there the subject is the value, here it is
+the import.
+
+This is not a trick to satisfy the tool. A module that throws while being imported takes the
+application down at startup, and until now the only observer of that was a test file that dies with
+it. `core`'s own tests are inside the layer, so importing the barrel here is not the boundary
+ADR-0029 is about.
+
+**The measurement.** Seven full runs on `ubuntu-latest` through
+`workflow_dispatch` — three on `main` at `08d7700` and four on this branch, all launched inside two
+minutes of each other so that neither side could draw the better half of the runner pool — and six
+more on one developer machine, which was running two other agents' suites throughout, so its
+durations are noise and only its verdicts are evidence.
+
+| machine            | tree             | runs  | score               | survivors    | truncated | duration                    |
+| ------------------ | ---------------- | ----- | ------------------- | ------------ | --------- | --------------------------- |
+| `ubuntu-latest`    | `main` `08d7700` | **3** | **94.75** every run | 32, same set | **8**     | 6m52s, 7m01s, 7m03s         |
+| `ubuntu-latest`    | this branch      | **4** | **96.07** every run | 24, same set | **0**     | 6m17s, 7m03s, 7m31s, 10m22s |
+| 10-core `Mac16,13` | `main` `08d7700` | **3** | **94.75** every run | 32, same set | **8**     | 4m31s, 5m04s, 5m28s         |
+| 10-core `Mac16,13` | this branch      | **3** | **96.07** every run | 24, same set | **0**     | 5m33s, 6m48s, 6m20s         |
+
+The 24 are the 32 less exactly the eight, paired on mutant position, mutator and replacement: no
+mutant that was killed before survives now, in any of the thirteen runs. Eight survivors at ADR-0018's
+0.164 points each is 1.31, which is the whole of 94.75 to 96.07 to the second decimal.
+
+**On reproducibility, which is the part worth being careful about.** Thirteen runs returned one score
+per tree, and that is not the same as saying the score is stable: it says these thirteen runs were
+taken within an hour of each other, and ADR-0018's answered question has thirteen nightly runs of
+`ff005f10` spanning 94.75 to 95.57. The five positions that flap there — `bignum.ts:56` twice,
+`bignum.ts:115`, `bignum.ts:116` and `address.ts:30` — are survivors in all seven runs on
+`ubuntu-latest` here and in all six on the laptop, so a slower runner can still time one out and print 96.23 instead of 96.07. **What this change
+removes is not that noise.** It removes eight survivors that were never real, and it leaves the
+report able to say which kind of run it had: the residual spread is `Killed` against `Timeout`, a kill
+either way, while the eight were a red suite printed as a pass.
+
+**Duration is unchanged, and the spread is the runner.** The fourth branch run took 10m22s on a
+runner whose dry run cost 21.7 s net against 15.0 to 16.8 s for the other three — the same work on a
+machine 1.4x slower, which is ADR-0013's whole point — and the three comparable branch runs span
+6m17s to 7m31s against `main`'s 6m52s to 7m03s. The six new tests cost the dry run about 3 to 5 s on
+`ubuntu-latest` (256 tests at net 15.0 to 16.8 s, against 250 at 11.3 to 11.9 s) and about 0.3 s on
+the laptop, because each one re-evaluates the module graph under mutant switching. They are paid back
+where the eight mutants used to run all 250 tests to the end and now fail on the first one: their
+`testsCompleted` is 1.
+
+**Alternatives rejected.**
+
+- _`ignoreStatic: true`._ Measured in ADR-0023: it clears these by running the hybrid ones on their
+  covering tests, and pays 93 mutants moved to `Ignored`, 90 of which this suite kills. The test file
+  gets the same kills and keeps all 610 mutants scored, so that trade does not have to be made.
+- _`coverageAnalysis: "off"`._ What issue #6's last comment proposed trying first. It is worse in
+  both directions: with no coverage map every mutant takes the planner's last branch, so every mutant
+  gets static activation and the whole suite — the eight survive by exactly the same mechanism, and
+  the other 602 cost 256 tests each instead of about 7.
+- _Patching `mutant-test-planner.js` or the Vitest runner locally._ The blind spot is one
+  `tests.length === 0` check away from being reported and that belongs upstream; a local patch would
+  make this project's score incomparable with its own history (ADR-0023).
+- _Making the module bodies lazy._ Bending the construction of the format (ADR-0001) to suit the
+  measuring apparatus, in order to work around a reporting bug in the apparatus.
+- _Asserting the constants in the existing test files._ They already do. Their imports are at the
+  top, which is exactly what makes them unable to report this.
+
+**`address.ts:30` is a genuinely equivalent mutant, and stays measured.** `ROOM_COUNT` is
+`(LIBRARY_SIZE + BigInt(PAGES_PER_ROOM) - 1n) / BigInt(PAGES_PER_ROOM)`, and `+ 1n` for `- 1n`
+changes the quotient only when `LIBRARY_SIZE mod PAGES_PER_ROOM` is `0` or `PAGES_PER_ROOM - 1`. It
+is 261376 of 262400, so the two expressions are the same number for this library and no test can
+tell them apart (testing.md §4). It is left in the scored set rather than excluded with a
+`// Stryker disable`, because that comment is per line and per mutator and would take the two killed
+`ArithmeticOperator` mutants on the same line with it. It is also one of the five positions whose verdict flaps between
+nightly runs (ADR-0018's answered question), and the only one of those whose other verdict can only
+have been a timeout, since nothing can kill it.
+
+**Consequence.** The survivor list is a list of claims again: every remaining survivor ran every
+test it was planned to run, and the one equivalent mutant among them is named here with its
+arithmetic. The score rises 1.31 points for the same tests, because eight kills stopped being
+reported as gaps — which is the opposite direction from `ignoreStatic`, where the score rose by
+measuring 15% less.
+
+Two things are left open rather than settled. `break: 92` now tolerates 25 extra survivors against a
+measured spread of five, where ADR-0018 chose about four spreads of margin; the figures for
+tightening it to 93 are in that record's answered question, and it is not done here because a gate
+recalibrated on the run that moved its floor is the ADR-0013 mistake. And the upstream report — that
+a Vitest run in which no test ran at all is reported as a survival — is written down for a Stryker
+issue and acted on from the test side only.

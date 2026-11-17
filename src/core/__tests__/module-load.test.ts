@@ -25,10 +25,16 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
  */
 
 beforeEach(() => {
-  // Each test evaluates the module body itself rather than inheriting an
-  // instance an earlier test loaded. A cached module body runs once, so
-  // without this the first test to reach a module would be the only one that
-  // could fail when its body throws.
+  // Order independence (testing.md §9). The module registry is state shared
+  // between the tests in this file: without the reset, every test after the
+  // first reads whatever module instance an earlier one happened to import.
+  //
+  // The kill does not depend on it, which was measured rather than assumed —
+  // with the reset removed and `alphabet.ts:50` mutated by hand, all six tests
+  // still fail, because a module body that threw stays errored in the registry
+  // and the next import rethrows. What it costs is about 3.5 s of Stryker's
+  // dry run on `ubuntu-latest`, six module graphs re-evaluated under mutant
+  // switching; ADR-0031 has that figure and the total run absorbs it.
   vi.resetModules();
 });
 
