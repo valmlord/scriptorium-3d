@@ -322,6 +322,14 @@ describe('the resolver as a source of pending work', () => {
     expect(resolver.isIdle()).toBe(true);
   });
 
+  it('reports idle at once while nothing is being generated', async () => {
+    const { resolver } = harness();
+
+    await resolver.whenIdle();
+
+    expect(resolver.isIdle()).toBe(true);
+  });
+
   it('is busy while a shelf is being generated', () => {
     const { navigation, resolver } = harness();
 

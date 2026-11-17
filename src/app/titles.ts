@@ -192,11 +192,16 @@ export function createTitleResolver(options: TitleResolverOptions): TitleResolve
     requested = null;
   }
 
-  /** Release the idle waiters, if nothing is being generated. */
+  /**
+   * Release the idle waiters.
+   *
+   * Unconditional, because every call site below is a settlement: the shelf
+   * arrived, or it failed, or the machine left it and it was abandoned. A
+   * guard here asking whether the resolver is idle could not fail from any of
+   * them, and a check nobody has watched fail is this project's recurring
+   * defect (ADR-0030's own note on the matter).
+   */
   function release(): void {
-    if (!resolver.isIdle()) {
-      return;
-    }
     for (const resolve of idleWaiters.splice(0)) {
       resolve();
     }
