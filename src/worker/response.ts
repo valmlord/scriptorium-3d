@@ -14,7 +14,7 @@ import type {
   StaleResponse,
   TitleResponse,
 } from './protocol';
-import type { Address } from '@core/index';
+import type { Address } from '@core/address';
 
 /**
  * Narrowing the other direction of the wire: a payload the worker posted, made

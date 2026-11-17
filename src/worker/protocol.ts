@@ -1,4 +1,4 @@
-import type { Address, BookAddress } from '@core/index';
+import type { Address, BookAddress } from '@core/address';
 
 /**
  * The wire format between the worker client and the worker (SPEC §6).

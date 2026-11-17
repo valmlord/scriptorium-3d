@@ -28,7 +28,6 @@ import {
   UnknownSymbolError,
 } from '../errors';
 import {
-  FORMAT_VERSION,
   TITLE_LENGTH,
   TITLE_SHIFT,
   defaultRandomSource,
@@ -138,10 +137,6 @@ const firstInvalidAddress: Address = (() => {
 })();
 
 describe('SPEC §5 constants', () => {
-  it('exports FORMAT_VERSION 1, carried in every shareable URL', () => {
-    expect(FORMAT_VERSION).toBe(1);
-  });
-
   it('defines a title as the first 25 characters of page 0', () => {
     expect(TITLE_LENGTH).toBe(25);
   });

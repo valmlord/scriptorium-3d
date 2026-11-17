@@ -7,8 +7,8 @@ import { PAGE_ALPHABET, digitToSymbol } from '../alphabet';
 import { intToDigits } from '../bignum';
 import { AddressBeyondLibraryError } from '../errors';
 import { ROUNDS } from '../feistel';
+import { FORMAT_VERSION } from '../format';
 import {
-  FORMAT_VERSION,
   TITLE_LENGTH,
   getPage,
   getTitle,

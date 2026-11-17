@@ -1,6 +1,6 @@
 # @app
 
-Application root. The only layer allowed to import everything, and the place where integration happens.
+Application root. The layer allowed to import every other one, and the place where integration happens.
 
 ## What belongs here
 
@@ -14,11 +14,14 @@ Application root. The only layer allowed to import everything, and the place whe
 
 ## What cannot be imported
 
-- (Nothing is restricted; `@app` imports everything)
+- `@core`'s generation surface — `prf`, `feistel`, `library` and the `index` barrel. `@app` runs on
+  the main thread, which is exactly what ADR-0005 keeps generation off; a page arrives through
+  `@worker/client` (ADR-0029). This is the layer's one restriction, and `src/main.ts` carries it too
 
 ## Imports allowed
 
-- Everything: `@core`, `@worker`, `@engine`, `@motion`, `@state`, `@ui`
+- Everything else: `@core`'s address model, `@worker`, `@engine`, `@motion`, `@state`, `@ui`,
+  `three`, `gsap`
 
 ## Responsibilities
 

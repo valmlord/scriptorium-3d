@@ -40,7 +40,8 @@ Worker client. The thread boundary: calls `@core` at runtime and sends/receives 
 
 - `three`
 - `gsap`
-- `@engine`, `@motion`, `@state`, `@ui` — the worker client does not reach into the scene or UI
+- `@engine`, `@motion`, `@state`, `@ui`, `@app` — the worker client does not reach into the scene,
+  the interface or the composition root
 
 Nothing here reaches for a main-thread frame API: no `requestAnimationFrame`, no reading the
 renderer's timings, nothing that belongs to the loop this layer exists to keep clear.
@@ -51,10 +52,14 @@ would be a budget that varied by a factor of two between the machines in ADR-000
 
 ## Imports allowed
 
-- `@core/*` at runtime (this is the only layer that may)
+- All of `@core` at runtime, the generation surface included. This is the only layer that may
+  generate a page (ADR-0005, ADR-0029); every other layer reaches one through `client.ts`.
 - Type-only imports from anywhere
 
 ## What calls @worker
 
-- `@state` for data fetching
-- `@engine` or `@ui` for integration with the scene and interface
+- `@ui`, through `client.ts` and nothing else, for pages, titles and search results
+- `@app`, when it wires the client to the rest
+
+Every other layer sees this one as types only. The client is where the thread boundary is crossed,
+so there is one place to look when a request goes missing.
