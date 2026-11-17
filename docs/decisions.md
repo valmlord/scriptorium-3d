@@ -1696,3 +1696,105 @@ the run summary, where GitHub shows them on the run's own page, with no threshol
 nobody can find without opening a log is a figure nobody will find. Whether that earns a job is the
 question, and it is recorded rather than acted on because `verify`'s critical path is held by other jobs
 and adding a step to it would be the easy half of the answer with the reporting half missing.
+
+---
+
+## ADR-0030 — An interrupted flight retargets the playhead; the timeline is never rebuilt under it
+
+**Decision.** Interruption is settled by four rules, and the fourth is the only one that is not a
+restatement of the first three:
+
+1. **The machine commits on the event; the rig is a projection that lags behind it.** There is no
+   "in flight" navigation state. The instant an event is accepted the FSM is at the new level, and
+   the camera is somewhere on its way there.
+2. **The rig is moved only by the master timeline**, whose legs are `fromTo` tweens with both ends
+   written out. The rig is therefore a pure function of the playhead: seek to a time and the rig is
+   that time's values, in any order, any number of times.
+3. **An interruption kills the playhead tween and starts another towards the new label.** It never
+   kills a leg, never recaptures a leg's start values, and never rebuilds the timeline under a
+   moving playhead.
+4. **When the route asked for disagrees with the route built, the flight first takes the playhead
+   back to the last stop the two still share**, and only then replaces what hangs below it. Both
+   phases are the same mechanism — a playhead tween to a label — so there is no second code path to
+   get wrong.
+
+**Why.**
+
+**Where the machine commits.** The alternative is committing on arrival, and it makes the FSM lie
+for the whole duration of every flight. The URL (M8) and the overlays (M6) are projections of it
+(architecture §4), so a second event arriving mid-flight would be read against a level the user has
+already left, and a link copied during a flight would name the wrong book. Putting the flight into
+the machine instead — `room`, `flying-to-wall`, `wall`, and so on — doubles a table whose totality
+is the point of architecture §4, and half of the new states are not places anyone can be.
+
+**Why the legs are `fromTo` and not `to`.** A `to` tween records its start values the first time it
+renders, so what such a timeline _means_ depends on when it was first played and on where the rig
+happened to be at that moment. Interrupt it and those recorded values are no longer the level above,
+so playing it backwards lands somewhere that is not a level at all — and nothing in the code would
+report it, because a tween always arrives at something. With both ends written out, a leg is the
+same function of the playhead forever, which is what lets a test assert the rig against the
+timeline at **every frame** of an interruption rather than only at the end of one.
+
+**Why the playhead is what gets killed.** A playhead tween holds nothing but a destination; a leg
+holds the geometry of the route. ADR-0004 requires that going back be the same timeline rather than
+a second animation kept in step with the first, so the legs are retained and only the scrub is
+replaced. That is also the answer to the obvious objection that this is not literally `.reverse()`:
+gsap's `reverse()` has exactly one destination, the start of the timeline, and the ladder has four
+levels. Going back one level from a book has to stop at the shelf, so the playhead is tweened to the
+label above — the same timeline, the same legs, played backwards, with no second animation in
+existence to disagree with.
+
+**Why a retreat rather than a rebuild in place.** A leg may only be replaced while the playhead is
+above it. Rebuilding the leg the playhead is standing in would mean capturing a start value at an
+arbitrary point of a movement, which is the `to()` problem above with extra steps: the leg would
+claim to begin at a level it does not begin at, and could no longer be reversed to one. A retreat
+costs the user a movement they did ask for — they went back, and then chose somewhere else — and
+never a movement they did not.
+
+**What consistency means here, precisely.** At every instant: the FSM names a level, the playhead is
+somewhere on the built route, and the rig is the timeline evaluated at the playhead. The FSM and the
+rig may disagree about **where the camera is**, because that disagreement is what an animation is.
+They may not disagree about **where it is going**. This is why `waitForIdle()` cannot be answered by
+"no tween is running": a label is a level's name, so a `wall` label on a route built for another
+wall sits at the same time on the timeline and means a different place. The flight answers with both
+halves — the playhead is at the wanted label, and the route to it is the one that was wanted — and
+`__tests__/flight.test.ts` has the case where the label alone would have said yes.
+
+**Alternatives rejected.**
+
+- _Complete the interrupted flight instantly (`progress(1)`) and start the new one from there._ Every
+  start value stays honest and the camera snaps by up to a whole level on every interruption. A
+  camera system may have many faults; teleporting while the reader is watching is not one it can
+  afford.
+- _Kill the running legs and build a fresh timeline from the rig's current values._ This is
+  ADR-0004's second hand-written animation wearing the first one's name. The new timeline's origin
+  is wherever the camera was interrupted, so going back no longer returns to a level, and nothing
+  fails — it simply stops being a ladder.
+- _An "in flight" state in the machine, with the camera as the source of truth for arrival._ Doubles
+  the transition table and inverts architecture §4: the projection would be telling the source of
+  truth where the user is.
+- _Queue the interrupting event until the current flight finishes._ The camera then keeps flying
+  towards a level the user has already left, and the queue becomes a second record of where the user
+  is going, which is the thing architecture §4 exists to forbid.
+- _A timeline per pair of levels, played in sequence._ Each pair is then an animation to keep in step
+  with its own reverse, and a descent of three levels is three eases with two standstills in the
+  middle of it. That is three flights that happen to touch, not the one continuous flight the
+  milestone asks for.
+
+**Consequence.**
+
+- `prefers-reduced-motion` (M10) is `timeline.seek(label)` in place of the playhead tween: the same
+  timeline and no second code path, because the rig is a function of the playhead and of nothing
+  else.
+- A retreat is visible: backing out of a book and choosing another shelf flies up to the wall before
+  it flies down again. That movement is the price of never snapping, and it is the user's own route
+  played out rather than a path invented for them.
+- One frame of stillness remains at a rebuild boundary. The retreat's arrival is reported by gsap
+  inside a render, and the tween that continues the journey starts on the next one, so a rebuilt
+  flight pauses for about 16 ms at the level the two routes share. It is one frame at a point where
+  the camera is changing direction anyway, and the alternative is building the next leg before the
+  playhead has finished leaving the old one.
+- Something has to own gsap's clock. A playhead tween is advanced by gsap's root timeline, and the
+  root is advanced from the one `setAnimationLoop` through `src/motion/clock.ts`, which takes the
+  root off gsap's own ticker. That is what keeps architecture §2's single loop true with gsap
+  installed, and it is also why no test in `src/motion` waits on a wall clock.

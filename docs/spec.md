@@ -219,10 +219,14 @@ inside the reader (M6), which moves no camera and changes no level. A level is a
 state that cannot be flown to is a state the camera and the machine would have had to disagree about.
 `page` stays in the address (§3) and in the URL (§7); a book is entered at its page 0.
 
-**Animation model.** Every transition between navigation levels is one GSAP timeline carrying a label.
-Going back is `.reverse()` of that same timeline, never a second hand-written animation. GSAP animates a
-plain `CameraRig` object of numeric fields; the rig is applied to the three.js camera once per frame. GSAP
-never touches three.js objects directly.
+**Animation model.** The levels are labels on one GSAP timeline, one leg between each pair. Flying to a
+level takes that timeline's playhead to its label, and going back plays the same timeline backwards to the
+label above — never a second hand-written animation. (`.reverse()` itself is not the call, because it has
+one destination and the ladder has four levels; ADR-0030 has the mechanism and what happens when a flight
+is interrupted halfway.) GSAP animates a plain `CameraRig` object of numeric fields; the rig is applied to
+the three.js camera once per frame, inside the one render loop. GSAP never touches three.js objects
+directly, and its own ticker does not drive anything: the render loop advances GSAP's root timeline, so the
+project keeps the single animation loop `docs/architecture.md` §2 requires.
 
 **Generation off the main thread.** A page costs single-digit milliseconds, which is fine once and
 ruinous 32 times in a frame while generating shelf titles. All generation goes through the worker
