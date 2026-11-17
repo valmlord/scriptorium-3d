@@ -27,6 +27,17 @@
   z-index: 1;
 }
 
+/*
+ * The `hidden` attribute is how the reader closes, and a class setting
+ * `display` outranks the user agent's own `[hidden] { display: none }`. Without
+ * this rule the overlay is on screen at every level, which also costs a frame:
+ * a visible element over the canvas takes it out of the compositor's fast path
+ * and the driver reports the readback as a stall.
+ */
+.reader[hidden] {
+  display: none;
+}
+
 .reader-panel {
   pointer-events: auto;
   display: flex;
