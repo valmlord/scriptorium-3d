@@ -63,8 +63,8 @@ codebase that gap is the whole risk. Stryker runs against `src/core` only:
   of that record.
 - **Nightly on `main`, and on demand** via `workflow_dispatch` — not on pushes or pull requests.
   ADR-0014 took it off that path when a run cost 21 to 70 minutes. It is now **6m17s to 15m04s on
-  `ubuntu-latest`** over twenty runs under 9.6.1 — thirteen nightly ones at 9m59s to 15m04s and
-  seven `workflow_dispatch` ones at 6m17s to 10m22s (ADR-0031) — so the reason it left that path has
+  `ubuntu-latest`** over twenty-one runs under 9.6.1 — thirteen nightly ones at 9m59s to 15m04s and
+  eight `workflow_dispatch` ones at 6m17s to 10m22s (ADR-0031) — so the reason it left that path has
   gone. Whether to put a seven-to-fifteen-minute job back on every pull request is still ADR-0014's
   question; what has changed is that it is no longer being argued from one developer machine.
 - The pull request path runs `npm run test:mutation:dry` instead: Stryker's dry run, a 34-second job

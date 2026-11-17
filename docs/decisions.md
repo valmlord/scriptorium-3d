@@ -2139,9 +2139,9 @@ of them minded, so the test count is part of the claim: a static mutant is plann
 filter and runs every test in the dry run, and any other mutant runs the tests that cover it. A
 survivor that completed fewer than that did not survive anything. `scripts/check-mutation-report.ts`
 asserts exactly that over the `json` report and fails the run on a shortfall. Over the ten reports
-it has been run on — the six taken on the laptop below, and the four `ubuntu-latest` runs of this
+it has been run on — the six taken on the laptop below, and the five `ubuntu-latest` runs of this
 branch, where the job runs it itself — it names the eight in each of the three reports taken from
-`main` and nothing in the other seven: 264 survivor observations, and every survivor other than
+`main` and nothing in the other eight: 288 survivor observations, and every survivor other than
 those eight, static and runtime alike, completed its planned count to the test. It is the same shape as
 `scripts/check-mutation-harness.sh` asserting the dry run's test count, and for the same reason: a
 truncated run that reads as a pass is the failure this repository keeps finding (ADR-0014).
@@ -2159,38 +2159,39 @@ application down at startup, and until now the only observer of that was a test 
 it. `core`'s own tests are inside the layer, so importing the barrel here is not the boundary
 ADR-0029 is about.
 
-**The measurement.** Seven full runs on `ubuntu-latest` through
-`workflow_dispatch` — three on `main` at `08d7700` and four on this branch, all launched inside two
-minutes of each other so that neither side could draw the better half of the runner pool — and six
-more on one developer machine, which was running two other agents' suites throughout, so its
+**The measurement.** Eight full runs on `ubuntu-latest` through `workflow_dispatch` — three on
+`main` at `08d7700` and five on this branch, four of them launched inside two minutes of the `main`
+three so that neither side could draw the better half of the runner pool, and the fifth on the
+branch's final commit, whose only difference from the other four is documentation — and six more on
+one developer machine, which was running two other agents' suites throughout, so its
 durations are noise and only its verdicts are evidence.
 
-| machine            | tree             | runs  | score               | survivors    | truncated | duration                    |
-| ------------------ | ---------------- | ----- | ------------------- | ------------ | --------- | --------------------------- |
-| `ubuntu-latest`    | `main` `08d7700` | **3** | **94.75** every run | 32, same set | **8**     | 6m52s, 7m01s, 7m03s         |
-| `ubuntu-latest`    | this branch      | **4** | **96.07** every run | 24, same set | **0**     | 6m17s, 7m03s, 7m31s, 10m22s |
-| 10-core `Mac16,13` | `main` `08d7700` | **3** | **94.75** every run | 32, same set | **8**     | 4m31s, 5m04s, 5m28s         |
-| 10-core `Mac16,13` | this branch      | **3** | **96.07** every run | 24, same set | **0**     | 5m33s, 6m48s, 6m20s         |
+| machine            | tree             | runs  | score               | survivors    | truncated | duration                           |
+| ------------------ | ---------------- | ----- | ------------------- | ------------ | --------- | ---------------------------------- |
+| `ubuntu-latest`    | `main` `08d7700` | **3** | **94.75** every run | 32, same set | **8**     | 6m52s, 7m01s, 7m03s                |
+| `ubuntu-latest`    | this branch      | **5** | **96.07** every run | 24, same set | **0**     | 6m17s, 7m03s, 7m31s, 8m00s, 10m22s |
+| 10-core `Mac16,13` | `main` `08d7700` | **3** | **94.75** every run | 32, same set | **8**     | 4m31s, 5m04s, 5m28s                |
+| 10-core `Mac16,13` | this branch      | **3** | **96.07** every run | 24, same set | **0**     | 5m33s, 6m48s, 6m20s                |
 
 The 24 are the 32 less exactly the eight, paired on mutant position, mutator and replacement: no
-mutant that was killed before survives now, in any of the thirteen runs. Eight survivors at ADR-0018's
+mutant that was killed before survives now, in any of the fourteen runs. Eight survivors at ADR-0018's
 0.164 points each is 1.31, which is the whole of 94.75 to 96.07 to the second decimal.
 
-**On reproducibility, which is the part worth being careful about.** Thirteen runs returned one score
-per tree, and that is not the same as saying the score is stable: it says these thirteen runs were
+**On reproducibility, which is the part worth being careful about.** Fourteen runs returned one score
+per tree, and that is not the same as saying the score is stable: it says these fourteen runs were
 taken within an hour of each other, and ADR-0018's answered question has thirteen nightly runs of
 `ff005f10` spanning 94.75 to 95.57. The five positions that flap there — `bignum.ts:56` twice,
-`bignum.ts:115`, `bignum.ts:116` and `address.ts:30` — are survivors in all seven runs on
+`bignum.ts:115`, `bignum.ts:116` and `address.ts:30` — are survivors in all eight runs on
 `ubuntu-latest` here and in all six on the laptop, so a slower runner can still time one out and print 96.23 instead of 96.07. **What this change
 removes is not that noise.** It removes eight survivors that were never real, and it leaves the
 report able to say which kind of run it had: the residual spread is `Killed` against `Timeout`, a kill
 either way, while the eight were a red suite printed as a pass.
 
 **Duration is unchanged, and the spread is the runner.** The fourth branch run took 10m22s on a
-runner whose dry run cost 21.7 s net against 15.0 to 16.8 s for the other three — the same work on a
-machine 1.4x slower, which is ADR-0013's whole point — and the three comparable branch runs span
-6m17s to 7m31s against `main`'s 6m52s to 7m03s. The six new tests cost the dry run about 3 to 5 s on
-`ubuntu-latest` (256 tests at net 15.0 to 16.8 s, against 250 at 11.3 to 11.9 s) and about 0.3 s on
+runner whose dry run cost 21.7 s net against 15.0 to 17.3 s for the other four — the same work on a
+machine 1.3x slower, which is ADR-0013's whole point — and the four comparable branch runs span
+6m17s to 8m00s against `main`'s 6m52s to 7m03s. The six new tests cost the dry run about 3 to 5 s on
+`ubuntu-latest` (256 tests at net 15.0 to 17.3 s, against 250 at 11.3 to 11.9 s) and about 0.3 s on
 the laptop, because each one re-evaluates the module graph under mutant switching. They are paid back
 where the eight mutants used to run all 250 tests to the end and now fail on the first one: their
 `testsCompleted` is 1.
