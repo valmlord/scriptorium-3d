@@ -1,5 +1,4 @@
 import { expect, test } from '@playwright/test';
-import type { Page } from '@playwright/test';
 import {
   hookAddress,
   hookFramesRefusal,
@@ -8,6 +7,7 @@ import {
   hookRig,
   waitForIdle,
 } from './debug-hook';
+import { CURSOR_OVER_VOLUME, cursorOnCanvas, pointsOverVolumes } from './spines';
 
 /**
  * M5's end-to-end scenario: the room is a place you move through.
@@ -24,45 +24,8 @@ import {
  * asked about a build it is not running.
  */
 
-/** Where to look for a spine: a grid over the middle of the canvas. */
-const SCAN_COLUMNS = 9;
-const SCAN_ROWS = 7;
-
 /** The top of the frame at the room's vantage is ceiling, not shelf. */
 const CEILING_FRACTION = 0.04;
-
-/** The cursor the controls set over a volume. */
-const CURSOR_OVER_VOLUME = 'pointer';
-
-function cursorOnCanvas(page: Page): Promise<string> {
-  return page.evaluate(() => {
-    const canvas = document.getElementById('canvas');
-    return canvas instanceof HTMLCanvasElement ? canvas.style.cursor : 'missing';
-  });
-}
-
-/** Every point of a scan over the canvas where the pointer is over a volume. */
-async function pointsOverVolumes(page: Page): Promise<{ x: number; y: number }[]> {
-  const canvas = page.locator('canvas#canvas');
-  const box = await canvas.boundingBox();
-  expect(box).not.toBeNull();
-  if (box === null) {
-    return [];
-  }
-
-  const found: { x: number; y: number }[] = [];
-  for (let column = 1; column <= SCAN_COLUMNS; column += 1) {
-    for (let row = 1; row <= SCAN_ROWS; row += 1) {
-      const x = box.x + (box.width * column) / (SCAN_COLUMNS + 1);
-      const y = box.y + (box.height * row) / (SCAN_ROWS + 1);
-      await page.mouse.move(x, y);
-      if ((await cursorOnCanvas(page)) === CURSOR_OVER_VOLUME) {
-        found.push({ x, y });
-      }
-    }
-  }
-  return found;
-}
 
 test('the debug hook answers where the application is', async ({ page }) => {
   await page.goto('/');

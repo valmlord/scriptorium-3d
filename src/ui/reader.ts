@@ -68,9 +68,19 @@ export interface Reader {
   dispose(): void;
 }
 
-/** The overlay's element ids, which `aria-labelledby` and the tests use. */
+/**
+ * The overlay's element ids.
+ *
+ * `aria-labelledby` needs the heading's, and the end-to-end suite needs the
+ * controls' — a page turn interrupted mid-flight has to dispatch two turns
+ * inside one task, which a test can only do by finding the button in the page
+ * itself. One reader is mounted, so these are fixed rather than generated.
+ */
 const READER_ID = 'reader';
 const READER_TITLE_ID = 'reader-title';
+const PREVIOUS_ID = 'reader-previous';
+const NEXT_ID = 'reader-next';
+const CLOSE_ID = 'reader-close';
 
 /**
  * The interface chrome, in English.
@@ -103,9 +113,9 @@ export function createReader(options: ReaderOptions): Reader {
   // again on every turn, which is a worse reader than no live region at all.
   status.setAttribute('role', 'status');
 
-  const previous = button(TEXT.previous);
-  const next = button(TEXT.next);
-  const close = button(TEXT.close);
+  const previous = button(PREVIOUS_ID, TEXT.previous);
+  const next = button(NEXT_ID, TEXT.next);
+  const close = button(CLOSE_ID, TEXT.close);
 
   const page = document.createElement('article');
   page.className = 'reader-page';
@@ -254,10 +264,10 @@ export function createReader(options: ReaderOptions): Reader {
     pageRequest = request;
     request.result.then(
       (text) => {
-        accept(address, text);
+        accept(request, address, text);
       },
       (error: unknown) => {
-        refuse(address, error);
+        refuse(request, address, error);
       }
     );
   }
@@ -273,11 +283,15 @@ export function createReader(options: ReaderOptions): Reader {
    * replies in the order the user did not ask for. The guard is what makes
    * that case a non-event rather than a page the reader is not on.
    */
-  function accept(address: Address, text: string): void {
+  function accept(
+    from: GenerationRequest<string>,
+    address: Address,
+    text: string
+  ): void {
     if (!isOpen(address)) {
       return;
     }
-    pageRequest = null;
+    forgetPageRequest(from);
     const lines = pageLines(text);
     // Zipped over the lines and looked up by row: both are `READER_ROWS` long
     // by construction, so there is nothing to guard against here.
@@ -300,11 +314,15 @@ export function createReader(options: ReaderOptions): Reader {
    * on screen, because a reader that blanks is harder to diagnose than one
    * that says what happened.
    */
-  function refuse(address: Address, error: unknown): void {
+  function refuse(
+    from: GenerationRequest<string>,
+    address: Address,
+    error: unknown
+  ): void {
     if (!isOpen(address)) {
       return;
     }
-    pageRequest = null;
+    forgetPageRequest(from);
     settled = address;
     page.setAttribute('aria-busy', 'false');
     status.replaceChildren(`${TEXT.unavailable}: ${describe(error)}`);
@@ -324,7 +342,7 @@ export function createReader(options: ReaderOptions): Reader {
         if (!isOpenBook(book)) {
           return;
         }
-        titleRequest = null;
+        forgetTitleRequest(request);
         titled = book;
         title.replaceChildren(text);
         release();
@@ -333,12 +351,37 @@ export function createReader(options: ReaderOptions): Reader {
         if (!isOpenBook(book)) {
           return;
         }
-        titleRequest = null;
+        forgetTitleRequest(request);
         // The position below the heading says which volume this is, so a title
         // that did not arrive costs the heading and nothing else.
         release();
       }
     );
+  }
+
+  /**
+   * Forget the page request in flight, if `from` is the one in flight.
+   *
+   * It is not always: turning away from a page and back to it inside one task
+   * leaves a reply from the first request to arrive while the second is still
+   * out, and both are for the page the machine has open. The reply is still
+   * the right text for that page and is written; what must not happen is the
+   * record of the *other* request being cleared, because that would report the
+   * reader idle with a request outstanding and `waitForIdle()` would resolve
+   * in the middle of a turn.
+   */
+  function forgetPageRequest(from: GenerationRequest<string>): void {
+    if (pageRequest === from) {
+      pageRequest = null;
+      requestedPage = null;
+    }
+  }
+
+  /** The same, for the heading's request. */
+  function forgetTitleRequest(from: GenerationRequest<string>): void {
+    if (titleRequest === from) {
+      titleRequest = null;
+    }
   }
 
   /** Dispatch a turn to `wanted`, if that page of this volume exists. */
@@ -447,8 +490,9 @@ function element<Tag extends keyof HTMLElementTagNameMap>(
   return created;
 }
 
-function button(label: string): HTMLButtonElement {
+function button(id: string, label: string): HTMLButtonElement {
   const created = element('button', 'reader-button');
+  created.id = id;
   created.type = 'button';
   created.replaceChildren(label);
   return created;
