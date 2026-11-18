@@ -25,7 +25,10 @@ import { SPINES_PER_ROOM } from '@engine/slots';
  * The atlas's arithmetic, tested without a browser.
  *
  * The canvas, the drawing and the shader patch are `../titles.ts` and are
- * asserted end to end (`docs/testing.md` §1). What is here is what decides
+ * asserted in `titles.test.ts` beside it, each over a stand-in rather than a
+ * browser (`docs/testing.md` §1). That sentence used to say "end to end",
+ * which was not true of the shader patch and was the reason nothing could fail
+ * when a chunk marker stopped matching. What is here is what decides
  * *which* title a spine shows: a cell's texture coordinates and which shelf
  * holds which row. Both are places where being wrong produces a spine
  * carrying another book's title, which looks exactly as plausible as the
