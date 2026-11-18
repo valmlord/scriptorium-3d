@@ -100,19 +100,21 @@ const titles = createTitleResolver({
 /**
  * How much of a room's name a console line carries.
  *
- * A name is base-36 and a room index runs to 4975 digits (`@core/address`), so
- * the whole name is not a thing to put in a console line: it would bury the
- * rest of the message and the digits past the first few identify nothing a
- * person can act on. The length is reported alongside, which is what makes two
- * truncated names distinguishable.
+ * A name is base-36 and the last room's is 3197 characters long
+ * (`@core/address`; 4975 is the same index in decimal, which is the figure
+ * that gets quoted and is not the one that matters here), so the whole name is
+ * not a thing to put in a console line: it would bury the rest of the message
+ * and the characters past the first few identify nothing a person can act on.
+ * The length is reported alongside, which is what makes two truncated names
+ * distinguishable.
  */
-const REPORTED_ROOM_NAME_DIGITS = 12;
+const REPORTED_ROOM_NAME_CHARACTERS = 12;
 
 function describeRoom(room: bigint): string {
   const name = roomToName(room);
-  return name.length <= REPORTED_ROOM_NAME_DIGITS
+  return name.length <= REPORTED_ROOM_NAME_CHARACTERS
     ? name
-    : `${name.slice(0, REPORTED_ROOM_NAME_DIGITS)} (${String(name.length)} digits)`;
+    : `${name.slice(0, REPORTED_ROOM_NAME_CHARACTERS)} (${String(name.length)} characters)`;
 }
 
 installControls(canvas, viewer, choreography);
@@ -126,9 +128,10 @@ viewer.start();
  * The rejection is caught and deliberately nothing is done with it. A worker
  * that cannot generate a throwaway page cannot generate the first page the
  * reader asks for either, and that one is refused in the reader's own status
- * line, where someone is looking. Reporting it here as well would be the only
- * `console` call in `src/`, in the one file that has nothing on screen yet to
- * report it on.
+ * line, where someone is looking. The refused shelf above is reported because
+ * nothing on screen can say so and the condition is a bug on this side of the
+ * boundary; a worker that cannot warm up says so through the reader on the
+ * very next page, so a second line here would report the same fault twice.
  */
 client.warmUp().catch(() => {
   // Deliberately nothing. See above.

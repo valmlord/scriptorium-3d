@@ -5,7 +5,9 @@ import type { Page } from '@playwright/test';
  *
  * This is what lets an end-to-end test ask the application where it is instead
  * of sleeping: every helper below waits on a state, and `waitForIdle` waits on
- * the camera having arrived. No test in this directory passes a duration to
+ * all four of the things that generate or draw - the camera flight, the worker
+ * client's request table, the reader and the title resolver (`src/app/idle.ts`,
+ * `docs/testing.md` §7). No test in this directory passes a duration to
  * anything.
  *
  * The hook is present because the suite runs against a **test build**
