@@ -448,6 +448,29 @@ describe('what the camera has left behind', () => {
     ]);
   });
 
+  it('settles and asks again when a shelf fails while the camera stays on it', async () => {
+    // The test below leaves the shelf first, and leaving clears the record by
+    // itself (`abandon()`), so it never exercises the rejection handler's own
+    // clear. This does: the camera stays where it is and the generation fails
+    // under it. Without the clear the record of a request that is over sits
+    // there for the rest of the session, which costs both of the things the
+    // record governs - `waitForIdle()` waits on a shelf nothing is generating,
+    // and a further event inside that shelf matches `sameShelf` and never asks
+    // again, so its spines stay blank with no error anywhere.
+    const { navigation, source, resolver } = harness();
+    goTo(navigation, SHELF);
+    const idle = resolver.whenIdle();
+
+    source.forShelf(SHELF).reject(new Error('the worker gave up'));
+
+    await idle;
+    expect(resolver.isIdle()).toBe(true);
+
+    goTo(navigation, SHELF, 3);
+
+    expect(source.issued).toHaveLength(2);
+  });
+
   it('asks again for a shelf whose titles never arrived', async () => {
     const { navigation, source } = harness();
     goTo(navigation, SHELF);

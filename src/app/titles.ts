@@ -215,23 +215,31 @@ export function createTitleResolver(options: TitleResolverOptions): TitleResolve
           release();
           return;
         }
-        // Guarded for symmetry with the rejection path below, and said
-        // plainly: **no test can fail if this one line goes back to a bare
-        // `forget()`**, because the case needs a stale reply that *resolves*
-        // while a newer request for the same shelf is still in flight, and the
-        // client cannot produce it. A shelf resolves in-task only when all 32
-        // titles were cache hits, which leaves no ids to cancel; for the newer
-        // request to be in flight one of those 32 must have left the cache
-        // between two reads in the same task, and eviction only follows a
-        // worker reply, which is a later task (`@worker/client`'s `title` and
-        // `shelfTitles`).
+        // Said plainly: **no test can fail if this one line goes back to a
+        // bare `forget()`**. The case needs a stale reply that *resolves*
+        // while a newer request for the same shelf is recorded, and the
+        // client as it stands cannot produce one. Over a real worker a shelf
+        // resolves inside the asking task only when all 32 titles were cache
+        // hits, which leaves no ids and makes `cancel()` a no-op; the newer
+        // request could then only be in flight if one of those 32 had left the
+        // cache in between, and it cannot have - a hit promotes its entry to
+        // most-recent and the title budget is a whole room of 640, so
+        // displacing one of the 32 just read would take some 600 further
+        // insertions, where a `Promise.all` over resolved promises settles in
+        // a tick or two (`@worker/client`, `@worker/cache`). Over a double
+        // that answers inside `postMessage` the first clause does not hold,
+        // since neither ask is a hit; the conclusion does, because the same
+        // double settles the newer request too.
         //
-        // It is guarded anyway because the alternative is an asymmetry whose
-        // safety can only be established by reconstructing that paragraph from
-        // another layer's cache internals, and because `forgetIfCurrent` is
-        // the rule for clearing this record rather than an optimisation of it.
-        // The rejection path's version of the same hazard *is* reachable and
-        // is tested.
+        // Guarded regardless, and not merely for symmetry: this module is
+        // written against the injected `ShelfTitleSource`, not against
+        // `GenerationClient`. A bare `forget()` here would make it correct
+        // only by virtue of another layer's LRU budget, across a boundary,
+        // with nothing on either side to notice if that client ever batched
+        // its replies or split its stores. Narrowing `forget()` costs one
+        // reference comparison and is the old behaviour in every state that
+        // can occur. The rejection path's version of this hazard *is*
+        // reachable, and is tested.
         forgetIfCurrent(issued);
         try {
           write(shelf, titles);
@@ -253,15 +261,16 @@ export function createTitleResolver(options: TitleResolverOptions): TitleResolve
         }
       },
       () => {
-        if (!isWanted(shelf)) {
-          forgetIfCurrent(issued);
-          release();
-          return;
-        }
+        // One path for both cases, because they want the same two calls.
         // Nothing is recorded for a shelf that did not arrive, so coming back
-        // to it asks again - and only if this reply is still the one recorded,
-        // because a cancellation rejects into the microtask queue and the
-        // machine may already have asked for this same shelf again.
+        // to it asks again; and the record is cleared only if this reply is
+        // still the one holding it, because a cancellation rejects into the
+        // microtask queue and the machine may already have asked for this
+        // shelf again. That covers a shelf the machine has left and a shelf it
+        // has returned to alike, so an `isWanted` branch here would have
+        // identical arms - it was written with one, and hard-wiring the
+        // condition either way left all 982 tests passing, which is what a
+        // branch that decides nothing looks like.
         forgetIfCurrent(issued);
         release();
       }
