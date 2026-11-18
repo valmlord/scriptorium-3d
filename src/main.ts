@@ -67,6 +67,24 @@ const titles = createTitleResolver({
   navigation: choreography.navigation,
   source: client,
   destination: viewer,
+  /**
+   * A shelf the atlas will not take, reported here because this is the only
+   * place that could decide what to do with it, and the honest answer in M6 is
+   * nothing: a spine cannot show an error, and a `console` call here would be
+   * the only one in `src/`. The shelf stays undrawn and is asked for again the
+   * next time the camera approaches it, so the consequence is a wall of blank
+   * spines rather than a silent wrong title, which is the direction this
+   * project errs in.
+   *
+   * It is a reported failure rather than an unhandled rejection because an
+   * unhandled rejection is a console line nobody owns and a red test run, and
+   * because the condition is a bug on this side of the boundary: the client
+   * fans a shelf out over exactly the number of requests the atlas requires.
+   * The frame instrumentation of M10 is where this gets somewhere to go.
+   */
+  onFailure: () => {
+    // Deliberately nothing. See above.
+  },
 });
 
 installControls(canvas, viewer, choreography);

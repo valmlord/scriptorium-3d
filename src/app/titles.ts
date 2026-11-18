@@ -73,6 +73,23 @@ export interface TitleResolverOptions {
   readonly navigation: Navigation;
   readonly source: ShelfTitleSource;
   readonly destination: TitleDestination;
+  /**
+   * Where a shelf the atlas will not take is reported.
+   *
+   * Required rather than optional, because the decision is the composition
+   * root's and there is no default worth having. The atlas refuses a shelf
+   * that is not `BOOKS_PER_SHELF` titles or does not begin a shelf
+   * (`@engine/atlas`), and the client fans a shelf out over exactly that many
+   * requests, so a refusal is a bug on this side of the boundary rather than a
+   * condition of the library.
+   *
+   * It exists because the alternative is worse: a throw inside the reply
+   * handler has no caller to reach, so it becomes an unhandled rejection,
+   * which is a console line nobody owns in a browser and a failed run in the
+   * suite. `ResourceRegistry.disposeAll` can be loud to its caller because it
+   * has one; this cannot, so the owner is passed in.
+   */
+  readonly onFailure: (error: unknown) => void;
 }
 
 /** The title resolver, watching the machine. */
@@ -87,7 +104,7 @@ export interface TitleResolver {
 
 /** Start resolving titles for whichever shelf the machine is at. */
 export function createTitleResolver(options: TitleResolverOptions): TitleResolver {
-  const { navigation, source, destination } = options;
+  const { navigation, source, destination, onFailure } = options;
 
   /** The shelf the machine is at, or `null` above the shelf level. */
   let wanted: ShelfAddress | null = null;
@@ -175,16 +192,17 @@ export function createTitleResolver(options: TitleResolverOptions): TitleResolve
         forget();
         try {
           write(shelf, titles);
+        } catch (error: unknown) {
+          // Reported to the owner rather than left to escape the handler, and
+          // nothing is recorded for this shelf, so the spines stay as they
+          // were and approaching it again asks for it again. That is the same
+          // outcome as a generation that failed, which is the other way a
+          // shelf does not arrive.
+          onFailure(error);
         } finally {
-          // The request has settled whatever the write does, and a shelf that
-          // arrives malformed is refused inside `setShelfTitles`
-          // (`@engine/atlas`). Releasing in a `finally` is what keeps that
-          // refusal from leaving `waitForIdle()` waiting on a request that is
-          // already over. The refusal itself is deliberately not caught: the
-          // client fans a shelf out over exactly `BOOKS_PER_SHELF` requests,
-          // so a shelf the atlas will not take is a bug on this side of the
-          // boundary and should be loud. What must not happen is idleness
-          // being wrong as well.
+          // The request has settled whatever the write did, so the waiters are
+          // released either way: a refused shelf must not leave
+          // `waitForIdle()` waiting on a request that is already over.
           release();
         }
       },

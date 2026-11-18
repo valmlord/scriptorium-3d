@@ -161,6 +161,17 @@ function goTo(navigation: Navigation, to: ShelfAddress, volume?: number): void {
   navigation.dispatchAll(eventsTo(navigation.state, target));
 }
 
+/**
+ * The failure reporter every harness here passes unless the test is about a
+ * refusal. A silent default would hide exactly the defect these tests exist
+ * for, so an unexpected refusal is rethrown and fails the test that caused it.
+ */
+function failLoudly(error: unknown): never {
+  throw error instanceof Error
+    ? error
+    : new Error(`the atlas refused a shelf: ${String(error)}`);
+}
+
 /** A resolver over a scripted source and a recording room. */
 function harness(): {
   navigation: Navigation;
@@ -173,7 +184,12 @@ function harness(): {
   const source = new ScriptedShelves();
   const room = new RecordingRoom(ROOM);
   const destination: TitleDestination = { room };
-  const resolver = createTitleResolver({ navigation, source, destination });
+  const resolver = createTitleResolver({
+    navigation,
+    source,
+    destination,
+    onFailure: failLoudly,
+  });
   return { navigation, source, room, destination, resolver };
 }
 
@@ -335,6 +351,7 @@ describe('where the titles are written', () => {
       navigation,
       source,
       destination: { room: null },
+      onFailure: failLoudly,
     });
     goTo(navigation, SHELF);
 
@@ -348,7 +365,12 @@ describe('where the titles are written', () => {
     const navigation = createNavigation(ROOM);
     const source = new ScriptedShelves();
     const elsewhere = new RecordingRoom(ROOM + 1n);
-    createTitleResolver({ navigation, source, destination: { room: elsewhere } });
+    createTitleResolver({
+      navigation,
+      source,
+      destination: { room: elsewhere },
+      onFailure: failLoudly,
+    });
     goTo(navigation, SHELF);
 
     source.forShelf(SHELF).resolve(titlesOf(SHELF));
@@ -403,19 +425,23 @@ describe('the resolver as a source of pending work', () => {
     expect(resolver.isIdle()).toBe(true);
   });
 
-  it('settles even when the atlas refuses the shelf it was given', async () => {
-    // `setShelfTitles` refuses a malformed shelf (`@engine/atlas`), and the
-    // request is over whatever it does with it. Without the `finally` the
-    // waiters are never released and `waitForIdle()` hangs on work that has
-    // already finished; reducing it back to a plain call leaves every other
-    // test in this file green.
+  it('reports a shelf the atlas refuses, and settles anyway', async () => {
+    // Two things at once, because they are the two halves of one defect. The
+    // refusal has to reach the owner rather than escape the reply handler,
+    // where it would be an unhandled rejection: a console line nobody owns in
+    // a browser, and a failed run in this suite. And the waiters have to be
+    // released whatever the write did, or `waitForIdle()` hangs on a request
+    // that is already over. Removing the `catch` turns this red with an
+    // unhandled error; removing the `finally` makes it hang.
     const navigation = createNavigation(ROOM);
     const source = new ScriptedShelves();
+    const refused = new Error('a shelf of titles the atlas would not take');
+    const reported: unknown[] = [];
     const refusing: RoomTitles = {
       room: ROOM,
       titles: {
         setShelfTitles: () => {
-          throw new Error('a shelf of titles the atlas would not take');
+          throw refused;
         },
         shelvesHeld: [],
       },
@@ -424,16 +450,49 @@ describe('the resolver as a source of pending work', () => {
       navigation,
       source,
       destination: { room: refusing },
+      onFailure: (error) => {
+        reported.push(error);
+      },
     });
     goTo(navigation, SHELF);
     const idle = resolver.whenIdle();
 
-    expect(() => {
-      source.forShelf(SHELF).resolve(titlesOf(SHELF));
-    }).not.toThrow();
+    source.forShelf(SHELF).resolve(titlesOf(SHELF));
 
     await idle;
+    expect(reported).toEqual([refused]);
     expect(resolver.isIdle()).toBe(true);
+  });
+
+  it('asks for a refused shelf again when the camera comes back', async () => {
+    // Nothing is recorded for a shelf that was not drawn, so the retry is the
+    // same mechanism a failed generation uses.
+    const navigation = createNavigation(ROOM);
+    const source = new ScriptedShelves();
+    const resolver = createTitleResolver({
+      navigation,
+      source,
+      destination: {
+        room: {
+          room: ROOM,
+          titles: {
+            setShelfTitles: () => {
+              throw new Error('a shelf of titles the atlas would not take');
+            },
+            shelvesHeld: [],
+          },
+        },
+      },
+      onFailure: () => undefined,
+    });
+    goTo(navigation, SHELF);
+    source.forShelf(SHELF).resolve(titlesOf(SHELF));
+    await resolver.whenIdle();
+
+    navigation.dispatch({ type: 'back' });
+    goTo(navigation, SHELF);
+
+    expect(source.issued).toHaveLength(2);
   });
 
   it('settles when it is disposed, and stops following the machine', async () => {
