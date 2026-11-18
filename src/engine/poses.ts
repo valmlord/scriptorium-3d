@@ -5,6 +5,7 @@ import type { NavigationLevel, NavigationState } from '@state/navigation';
 import { CAMERA_FOV } from './camera';
 import { SHELF_BOARD_THICKNESS, ROOM_INRADIUS, SPINE_HEIGHT } from './constants';
 import {
+  HEXAGON_SIDES,
   nearestBearing,
   shelfCentreHeight,
   shelfSurfaceHeight,
@@ -47,27 +48,49 @@ function standoffFraming(halfHeight: number, margin: number): number {
   return (halfHeight * margin) / Math.tan(HALF_FOV);
 }
 
-/**
- * Where the room level looks: hexagon side 1 is the first shelved wall
- * (`./constants.ts`), and a turn starting at a doorway would open on the dark
- * of a corridor with no neighbouring room in it yet.
- */
-const ROOM_BEARING = wallBearing(0);
+/** A side's bearing to either corner beside it: half the angle between sides. */
+const HALF_SIDE_ANGLE = Math.PI / HEXAGON_SIDES;
 
 /**
- * How far the room level stands from the middle of the room — *away* from the
- * wall it looks at, not towards it. Standing on the near side puts the camera
- * 1.1 m from a 2.4 m wall and crops it to a shelf and a half; from the far
- * side the frame holds all five shelves and the ceiling above them, with only
- * the nearest strip of floor out of view. The figure is M4's, and this is the
- * vantage M4's opening shot turned on the spot through.
+ * Where the room level looks: the corner the first two shelved walls share.
+ *
+ * Not at the middle of a wall, which is where this used to point. A wall
+ * subtends 60 degrees of the room and a `CAMERA_FOV` frame is 89 degrees wide
+ * at 16:9, so a camera square on to one wall sees past its edge and out
+ * through the doorway beside it, and what is through a doorway is the
+ * background colour: no corridor is built yet, and a quarter of the opening
+ * frame was that hole rather than a room (issue #46). Looking at the corner
+ * instead puts a shelved wall under each half of the frame and both doorways
+ * behind the camera's shoulders, which is also the only view that shows the
+ * room turning rather than one flat wall of books.
+ *
+ * It is the right place to turn from, too: every wall is then within 150
+ * degrees of where a flight starts, where facing wall 0 left the wall
+ * opposite a half turn away.
+ */
+const ROOM_BEARING = wallBearing(0) + HALF_SIDE_ANGLE;
+
+/**
+ * How far the room level stands from the middle of the room, *away* from the
+ * corner it looks at rather than towards it. That puts the camera 2.25 m from
+ * the corner, where a `CAMERA_FOV` frame reaches from 0.07 m to 2.56 m: the
+ * corner's whole height, shelf run and ceiling together, with only the
+ * nearest strip of floor out of view. The walls stand nearer than the corner
+ * does, so towards the edges of the frame the lowest shelf runs off the
+ * bottom; standing on the near side would crop every wall that way.
+ *
+ * It is also what keeps the doorways out of the frame, and the direction is
+ * the one nobody guesses: backing *further* off swings them back into view,
+ * because the camera retreats towards them while the corner stays put. The
+ * figure is M4's, and this is the vantage M4's opening shot turned on the
+ * spot through.
  */
 const ROOM_RADIAL = -0.45;
 
 /** Eye height of someone standing in the gallery. M4's figure. */
 const ROOM_HEIGHT_OF_EYE = 1.52;
 
-/** Where the room level looks, as a multiple of the inradius: past the wall rather than at it. */
+/** Where the room level looks, as a multiple of the inradius: past the corner, not at it. */
 const ROOM_FOCUS_REACH = 1.25;
 
 /** Slightly below eye level, which puts the middle shelves in the frame. M4's figure. */
