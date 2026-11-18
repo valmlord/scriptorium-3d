@@ -17,3 +17,19 @@
  * boundary.
  */
 export const FORMAT_VERSION = 1;
+
+/**
+ * A book's title is the first 25 characters of its page 0 (SPEC §5).
+ *
+ * Here for the reason above, applied a second time, which is the move ADR-0029
+ * named and left for whoever needed it. The length of a title is a fact about
+ * the format, not about generating one: `library.ts` uses it to decide how
+ * many digits to render, and `worker/cache.ts` uses it on the **main thread**
+ * to budget a cache entry in bytes. While it lived in `library.ts`, that one
+ * constant put the whole generation surface — `prf`, `feistel`, `library` and
+ * `@noble/hashes` — into the main-thread bundle the moment anything on that
+ * thread imported the worker client, which is what M6 did. ADR-0032 records
+ * the measurement, and `src/__tests__/production-bundle.test.ts` is what
+ * notices if it happens again.
+ */
+export const TITLE_LENGTH = 25;

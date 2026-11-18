@@ -3,11 +3,13 @@ import type { Page } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import { PAGE_LENGTH } from '../src/core/address';
 import type { Address, BookAddress } from '../src/core/address';
-import { TITLE_LENGTH, getPage, getTitle } from '../src/core/library';
+import { TITLE_LENGTH } from '../src/core/format';
+import { getPage, getTitle } from '../src/core/library';
 import { isApplicationMessage } from './console';
 import { hookAddress, hookLevel, waitForIdle } from './debug-hook';
 import { clickFirstVolume } from './spines';
 import { installWebGLProbe, readWebGLProbe } from './webgl-probe';
+import type { ProbeReport } from './webgl-probe';
 
 /**
  * M6's end-to-end scenarios: the page on screen is the page at that address,
@@ -46,6 +48,22 @@ const PREVIOUS_PAGE = '#reader-previous';
 /** 4 walls * 5 shelves * 32 volumes, restated because the page cannot be asked. */
 const SPINES_PER_ROOM = 640;
 
+/**
+ * The instance counts a room may legitimately issue, as `e2e/room.spec.ts`
+ * fixes them for M4: four wall panels, twenty shelf boards, the 640 spines and
+ * two lamp globes. Restated here rather than imported so that the two
+ * scenarios cannot drift into agreeing with each other instead of with the
+ * room.
+ */
+const LEGITIMATE_INSTANCE_COUNTS = [4, 20, 640, 2];
+
+/** Those four, plus the floor and the ceiling plates. */
+const MAX_DRAW_CALLS = 6;
+
+/** The atlas, in pixels (`src/engine/atlas.ts`): 32 cells across, 8 rows down. */
+const ATLAS_WIDTH = 1024;
+const ATLAS_HEIGHT = 2048;
+
 /** Frames to let pass before reading the draw-call probe. */
 const PROBE_FRAMES = 6;
 
@@ -82,6 +100,13 @@ function volumeOf(address: Address): BookAddress {
     shelf: address.shelf,
     volume: address.volume,
   };
+}
+
+/** How many times the spine title atlas was uploaded to the GPU. */
+function atlasUploadsOf(report: ProbeReport): number {
+  return report.uploads.filter(
+    (upload) => upload.width === ATLAS_WIDTH && upload.height === ATLAS_HEIGHT
+  ).length;
 }
 
 /** The reader's page text as the DOM holds it, which is the page itself. */
@@ -268,7 +293,7 @@ test('a turn superseded by a cached page writes nothing to the view', async ({
   // Page 0 and page 1 are both in the client's cache after this, and the
   // reader is on page 1. A cached page resolves inside the task that asks for
   // it and has nothing left to cancel, so this is the one case cancellation
-  // cannot answer (ADR-0031).
+  // cannot answer (ADR-0032).
   await page.locator(NEXT_PAGE).click();
   await waitForIdle(page);
   await watchText(page, READER_PAGE, 'pages');
@@ -346,6 +371,15 @@ test('the spines keep their one draw call once a shelf has titles', async ({
   await waitForIdle(page);
   const report = await readWebGLProbe(page, PROBE_FRAMES);
 
+  // The titles are on the GPU, not merely requested: the atlas reaches it as
+  // one upload of its own size. Without this the whole scenario would pass
+  // against a room whose spines never acquired a title, which is every room
+  // before M6 - and then it would assert nothing this milestone added.
+  const atlasUploads = report.uploads.filter(
+    (upload) => upload.width === ATLAS_WIDTH && upload.height === ATLAS_HEIGHT
+  );
+  expect(atlasUploads.length).toBeGreaterThan(0);
+
   const settled = report.frames.slice(-PROBE_FRAMES);
   expect(settled.length).toBeGreaterThan(0);
   for (const frame of settled) {
@@ -355,7 +389,40 @@ test('the spines keep their one draw call once a shelf has titles', async ({
     expect(frame.instanced.filter((count) => count === SPINES_PER_ROOM)).toHaveLength(
       1
     );
+    // And the two bounds that make that a statement about growth rather than
+    // about one number. Without them this scenario is a strict subset of M4's
+    // in `room.spec.ts`: a label mesh per resolved shelf would add a draw call
+    // at some other instance count and nothing here would notice.
+    for (const instanceCount of frame.instanced) {
+      expect(LEGITIMATE_INSTANCE_COUNTS).toContain(instanceCount);
+    }
+    expect(frame.instanced.length + frame.plain).toBeLessThanOrEqual(MAX_DRAW_CALLS);
   }
+});
+
+test('a shelf of titles is uploaded once, not once per page turn', async ({ page }) => {
+  await installWebGLProbe(page);
+
+  await page.goto('/');
+  await waitForIdle(page);
+  await clickFirstVolume(page);
+  await waitForIdle(page);
+  const before = await readWebGLProbe(page, PROBE_FRAMES);
+  const uploadsAfterOpening = atlasUploadsOf(before);
+  expect(uploadsAfterOpening).toBeGreaterThan(0);
+
+  await page.locator(NEXT_PAGE).click();
+  await waitForIdle(page);
+  await page.locator(NEXT_PAGE).click();
+  await waitForIdle(page);
+
+  // A title is a pure function of its address, so the shelf the reader is
+  // standing in is drawn once. three.js has no partial upload for a
+  // `CanvasTexture`, so a redraw per turn would send all 1024 by 2048 pixels
+  // again: measured at 3.2 to 4.4 ms of one animation callback on an Apple M4,
+  // against a 0.1 ms median (ADR-0032).
+  const after = await readWebGLProbe(page, PROBE_FRAMES);
+  expect(atlasUploadsOf(after)).toBe(uploadsAfterOpening);
 });
 
 test('reading a book logs nothing to the console', async ({ page }) => {

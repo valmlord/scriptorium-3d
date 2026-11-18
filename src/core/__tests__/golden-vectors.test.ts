@@ -7,15 +7,8 @@ import { PAGE_ALPHABET, digitToSymbol } from '../alphabet';
 import { intToDigits } from '../bignum';
 import { AddressBeyondLibraryError } from '../errors';
 import { ROUNDS } from '../feistel';
-import { FORMAT_VERSION } from '../format';
-import {
-  TITLE_LENGTH,
-  getPage,
-  getTitle,
-  locate,
-  search,
-  type PadMode,
-} from '../library';
+import { FORMAT_VERSION, TITLE_LENGTH } from '../format';
+import { getPage, getTitle, locate, search, type PadMode } from '../library';
 import { DOMAIN_TAG, PRF_BYTES } from '../prf';
 
 /**

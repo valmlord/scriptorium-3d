@@ -3,10 +3,15 @@ import {
   PAGES_PER_ROOM,
   PAGE_LENGTH,
   RADIX,
-  TITLE_LENGTH,
   toLinear,
-} from '@core/index';
-import type { Address, BookAddress } from '@core/index';
+} from '@core/address';
+import type { Address, BookAddress } from '@core/address';
+// The specific modules rather than the barrel, although `worker` may import
+// it: this module is read on the **main thread**, in front of the boundary,
+// so the barrel would put the generation surface it re-exports into the
+// main-thread bundle (ADR-0029, ADR-0032). The guard is in
+// `src/__tests__/production-bundle.test.ts`.
+import { TITLE_LENGTH } from '@core/format';
 
 /**
  * The cache the worker client sits behind: generated pages and titles, kept by

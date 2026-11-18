@@ -28,7 +28,6 @@ import {
   UnknownSymbolError,
 } from '../errors';
 import {
-  TITLE_LENGTH,
   TITLE_SHIFT,
   defaultRandomSource,
   getPage,
@@ -38,6 +37,7 @@ import {
   search,
   type RandomSource,
 } from '../library';
+import { TITLE_LENGTH } from '../format';
 
 const SPACE = digitToSymbol(PAGE_ALPHABET, 0);
 
