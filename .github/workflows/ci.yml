@@ -268,12 +268,21 @@ jobs:
         run: npm run test:mutation:dry
 
   mutation:
-    # The full run is twenty-one to fifty-nine minutes and its verdict is not
-    # reproducible: 56 of 587 mutant positions changed verdict between two runs
-    # whose `src/` trees were identical, moving the score 98.32 to 93.43. A gate
-    # that swings five points on unchanged code does not belong on the pull
-    # request path, so it is nightly on `main` plus `workflow_dispatch` for a
-    # branch that wants a number before it merges (ADR-0014, issue #6).
+    # Nightly on `main`, plus `workflow_dispatch` for a branch that wants a number
+    # before it merges (ADR-0014).
+    #
+    # This comment used to say the verdict was not reproducible, on a 98.32 to 93.43
+    # swing between two runs of an identical `src/` tree. That had a cause and the
+    # cause is fixed: `testTimeout` was Vitest's unexamined 5 s, so tests were timing
+    # out and killing their mutants for the wrong reason (ADR-0012's "third budget",
+    # ADR-0014's correction). Thirteen nightly runs of `ff005f10` scored 94.75 to
+    # 95.57 in 9m59s to 15m04s, a spread of five survivors, which is what `break` is
+    # calibrated on (ADR-0018). It stays off the pull request path because it is ten
+    # to fifteen minutes, not because it swings.
+    #
+    # `npm run test:mutation` runs `scripts/check-mutation-report.ts` after Stryker,
+    # which fails the job when a survivor's verdict came out of a run that stopped
+    # short of the tests it was planned to run (ADR-0031, issue #6).
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
