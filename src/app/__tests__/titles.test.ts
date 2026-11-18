@@ -343,6 +343,42 @@ describe('which shelf is asked for', () => {
     ).toHaveLength(2);
   });
 
+  it('does not let a reply for a shelf the camera returned to erase the newer request', async () => {
+    // The guard on `release()` reads `isIdle()`, so anything that can falsify
+    // `isIdle()` defeats it from one line away. A bare `forget()` is exactly
+    // that: it nulls the record whatever is in it, and a shelf the machine
+    // left and came back to inside one task is *wanted* again by the time its
+    // cancellation rejects, so the stale reply takes the branch for a shelf it
+    // still wants and wipes the record of the request issued on the return.
+    //
+    // Three things are lost at once, which is why this is worth a test for a
+    // sequence the interface cannot produce today: `waitForIdle()` returns
+    // with 32 titles in flight, the next event inside the shelf re-asks and
+    // pays the fan-out ADR-0032 measures, and nothing can cancel the orphaned
+    // request any more - the worker goes on computing a shelf the camera has
+    // left, which is the whole point of ADR-0016's cancellation.
+    const { navigation, source, resolver } = harness();
+    goTo(navigation, SHELF, 3);
+    source.forShelf(SHELF).resolve(titlesOf(SHELF));
+    await Promise.resolve();
+
+    goTo(navigation, OTHER_SHELF);
+    const abandoned = source.forShelf(OTHER_SHELF);
+    goTo(navigation, SHELF, 3);
+    goTo(navigation, OTHER_SHELF);
+    const reasked = source.forShelf(OTHER_SHELF);
+    const idle = resolver.whenIdle();
+
+    expect(abandoned.cancelled).toBe(true);
+    expect(await hasSettled(idle)).toBe(false);
+    expect(resolver.isIdle()).toBe(false);
+
+    // And the request that survived is still the resolver's to cancel.
+    goTo(navigation, SHELF, 3);
+
+    expect(reasked.cancelled).toBe(true);
+  });
+
   it('asks again for a shelf the atlas has displaced', async () => {
     // Which is why nothing here remembers having asked: the atlas holds seven
     // shelves of a room's twenty and displaces them in turn, so a shelf can

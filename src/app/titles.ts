@@ -215,7 +215,24 @@ export function createTitleResolver(options: TitleResolverOptions): TitleResolve
           release();
           return;
         }
-        forget();
+        // Guarded for symmetry with the rejection path below, and said
+        // plainly: **no test can fail if this one line goes back to a bare
+        // `forget()`**, because the case needs a stale reply that *resolves*
+        // while a newer request for the same shelf is still in flight, and the
+        // client cannot produce it. A shelf resolves in-task only when all 32
+        // titles were cache hits, which leaves no ids to cancel; for the newer
+        // request to be in flight one of those 32 must have left the cache
+        // between two reads in the same task, and eviction only follows a
+        // worker reply, which is a later task (`@worker/client`'s `title` and
+        // `shelfTitles`).
+        //
+        // It is guarded anyway because the alternative is an asymmetry whose
+        // safety can only be established by reconstructing that paragraph from
+        // another layer's cache internals, and because `forgetIfCurrent` is
+        // the rule for clearing this record rather than an optimisation of it.
+        // The rejection path's version of the same hazard *is* reachable and
+        // is tested.
+        forgetIfCurrent(issued);
         try {
           write(shelf, titles);
         } catch (error: unknown) {
@@ -242,9 +259,10 @@ export function createTitleResolver(options: TitleResolverOptions): TitleResolve
           return;
         }
         // Nothing is recorded for a shelf that did not arrive, so coming back
-        // to it asks again. A cancelled shelf never reaches here, because
-        // cancelling is what leaving it consists of.
-        forget();
+        // to it asks again - and only if this reply is still the one recorded,
+        // because a cancellation rejects into the microtask queue and the
+        // machine may already have asked for this same shelf again.
+        forgetIfCurrent(issued);
         release();
       }
     );
@@ -293,6 +311,20 @@ export function createTitleResolver(options: TitleResolverOptions): TitleResolve
    * reason: a reply from a superseded request must not clear the record of the
    * one that superseded it, or the resolver would report idle with a shelf
    * still being generated.
+   *
+   * **Every path that clears the record goes through here**, which was not
+   * true when this was written: the two branches for a reply the machine still
+   * wants cleared it unconditionally, and a shelf left and returned to inside
+   * one task is wanted again by the time its cancellation rejects. The cost of
+   * that was all three things this record exists for - `waitForIdle()`
+   * returning mid-generation, the next event re-asking and paying the fan-out
+   * again, and an orphaned request that leaving the shelf could no longer
+   * cancel, which is the worker time ADR-0005 and ADR-0016 buy. Only the
+   * rejection path reaches it; the comment on the other one says why it is
+   * guarded regardless.
+   *
+   * `forget()` keeps one caller, `abandon()`, where there is nothing newer by
+   * construction: it is the departure itself, and it cancels before it clears.
    */
   function forgetIfCurrent(issued: GenerationRequest<readonly string[]>): void {
     if (request === issued) {
