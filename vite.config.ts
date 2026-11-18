@@ -69,10 +69,19 @@ export default defineConfig({
       ],
       // Glob-keyed thresholds; a matched file does not inherit global ones.
       // engine/ and ui/ carry no threshold on purpose — they are covered by e2e.
+      //
+      // app/ had none either, and that was an omission rather than a decision:
+      // it is where the projections live, so M6 put the title resolver and the
+      // composition of `waitForIdle()` there, which is the most
+      // order-dependent code in the repository. Its floor is 80 rather than
+      // 90 because `controls.ts` installs DOM pointer handlers and is reached
+      // only from Playwright, so it sits at 0 here and the layer still
+      // aggregates to 87.
       thresholds: {
         'src/core/**': { lines: 100, branches: 100, functions: 100, statements: 100 },
         'src/worker/**': { lines: 90, branches: 90, functions: 90, statements: 90 },
         'src/state/**': { lines: 90, branches: 90, functions: 90, statements: 90 },
+        'src/app/**': { lines: 80, branches: 80, functions: 80, statements: 80 },
         'src/motion/**': { lines: 80, branches: 80, functions: 80, statements: 80 },
       },
     },
