@@ -2364,10 +2364,12 @@ the worker is still generating, and a turn superseded by a cache hit in its own 
   not both be right. Milliseconds where a turn costs tenths is the whole of what the rule needs.
   So `engine/titles.ts` leaves a shelf it already holds alone, and `app/titles.ts` asks the atlas
   what it holds before fanning a shelf out over 32 cache reads, each of which renders a key from the
-  room's linear index. That fan-out is 2.4 to 3.8 ms of `bigint` work per navigation event at the
-  deepest room, median 3.1 over nine runs under `vite-node` (the same non-reproducing shape, re-taken
-  because two copies of it had drifted to 2.31 and 2.47), against tens of nanoseconds for asking the
-  atlas which shelves it holds. The room is the one a deep link reaches (M8): its index is 4975
+  room's linear index. That fan-out is 2.3 ms of `bigint` work per navigation event at the
+  deepest room: 2.26 to 2.68 over 31 runs under `vite-node`, median 2.28, against tens of
+  nanoseconds for asking the atlas which shelves it holds. Re-taken because two copies of it had
+  drifted to 2.31 and 2.47, and taken again after a first attempt reported a median of 3.1 from nine
+  runs that had not warmed up - which is how a figure of this shape goes wrong, and the reason the
+  run count is given beside it. The room is the one a deep link reaches (M8): its index is 4975
   decimal digits, and its name, which is what a URL and a console line carry, is 3197 base-36
   characters. After both rules, a page turn costs no upload and a 0.1 ms median callback, and the
   first shelf of a room costs one callback of 9.2 to 9.6 ms while the camera is still flying.

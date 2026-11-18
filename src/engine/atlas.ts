@@ -4,8 +4,12 @@ import { SPINES_PER_ROOM } from './slots';
 
 /**
  * The geometry of the spine title atlas, and which shelf holds which of its
- * rows. Arithmetic only: the canvas, the texture and the drawing are
- * `./titles.ts`, which needs a browser and is asserted end to end.
+ * rows. Arithmetic only: the canvas, the texture, the drawing and the shader
+ * patch are `./titles.ts`, which injects its canvas so that it needs no
+ * browser either, and is asserted in `__tests__/titles.test.ts` over a
+ * stand-in. This sentence used to say that module needed a browser and was
+ * asserted end to end; both halves were false, and the second is why four
+ * `String.replace` calls went unasserted for two review rounds.
  *
  * **One row per shelf, one column per volume.** A shelf is `BOOKS_PER_SHELF`
  * volumes, so a row of that many cells is exactly a shelf and a cell's column
