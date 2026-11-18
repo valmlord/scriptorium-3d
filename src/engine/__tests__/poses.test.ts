@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { PerspectiveCamera, Vector3 } from 'three';
 import { BOOKS_PER_SHELF, SHELVES_PER_WALL, WALLS_PER_ROOM } from '@core/address';
-import { CAMERA_FOV } from '@engine/camera';
+import { CAMERA_FAR, CAMERA_FOV, CAMERA_NEAR, applyRig } from '@engine/camera';
 import {
   DOORWAY_SIDES,
   ROOM_CIRCUMRADIUS,
@@ -30,6 +31,7 @@ import {
   shelfPose,
   wallPose,
 } from '@engine/poses';
+import type { CameraPose } from '@motion/rig';
 import type { NavigationState } from '@state/navigation';
 
 /**
@@ -65,13 +67,24 @@ const AT_BOOK: NavigationState = {
 const SPINE_FACE_RADIAL = ROOM_INRADIUS - SPINE_WALL_CLEARANCE - SPINE_DEPTH;
 
 /**
- * The widest frame the opening vantage is claimed to hold the doorways out
- * of. A `CAMERA_FOV` frame reaches sideways in proportion to the aspect
- * ratio, so the claim is only as good as the shape of the window it is made
- * about: 16:9 is the shape the screenshot in the README is taken at and the
- * widest a monitor is usually sold in.
+ * The frame shape the opening vantage is claimed to hold the doorways out of.
+ *
+ * A `CAMERA_FOV` frame reaches sideways in proportion to the aspect ratio, so
+ * the claim is only ever about a shape of window, and this names the shape
+ * rather than pretending the property is unconditional. 16:9 is what the
+ * README screenshot is taken at and what most windows are near. It is not a
+ * ceiling: the margin runs out at about 2.08:1, so an ultrawide does show the
+ * doorway, and calling 16:9 the widest anything is sold in would be wrong.
+ * `poses.ts` says the same in prose, and a wider guarantee would have to be
+ * bought with a different radial rather than asserted here.
  */
 const WIDEST_FRAMED_ASPECT = 16 / 9;
+
+/**
+ * How far ahead the corner the room level faces stands: the circumradius out
+ * to the corner, plus the camera's own retreat from the middle of the room.
+ */
+const CORNER_DISTANCE = ROOM_CIRCUMRADIUS - ROOM_POSE.radial;
 
 /** Half the vertical angle of the frame, for a framing check. */
 function halfFrameAngle(fov: number): number {
@@ -82,16 +95,27 @@ function halfFrameAngle(fov: number): number {
 type Framing = { radial: number; height: number; pitch: number; fov: number };
 
 /**
- * What a pose can see, vertically, `distance` ahead of it. The pitch moves the
- * middle of the frame up or down; only the room's own vantage has any.
+ * What a pose can see, vertically, `distance` of horizontal travel ahead.
+ *
+ * The frame's edges are the two rays leaving the camera at `pitch - fov/2`
+ * and `pitch + fov/2` from the horizontal, so the angles are composed before
+ * the tangent is taken. Adding `distance * tan(pitch)` to a half-extent of
+ * `distance * tan(fov/2)` is a different number, and a smaller one: `tan` is
+ * convex, so the sum always understates the drop. It understates it in the
+ * unsafe direction, reporting a frame that reaches higher and crops less than
+ * it does. The two forms agree exactly at zero pitch, which is every wall,
+ * shelf and book pose, and that is why the error survived M5 and #51
+ * unnoticed until a pitched pose was measured with it (issue #52).
  */
 function verticalReachAt(
   pose: Framing,
   distance: number
 ): { bottom: number; top: number } {
-  const centre = pose.height + distance * Math.tan(pose.pitch);
-  const half = distance * Math.tan(halfFrameAngle(pose.fov));
-  return { bottom: centre - half, top: centre + half };
+  const half = halfFrameAngle(pose.fov);
+  return {
+    bottom: pose.height + distance * Math.tan(pose.pitch - half),
+    top: pose.height + distance * Math.tan(pose.pitch + half),
+  };
 }
 
 /** What a pose can see where the wall it faces square on stands. */
@@ -117,8 +141,15 @@ function groundPosition(pose: {
 
 /**
  * How far off the view axis a point on the floor lies, in radians, however far
- * away it is. A point behind the camera comes back past a right angle, which
- * is what makes this a usable test of "out of frame".
+ * away it is, and **signed**: negative to one side of the axis and positive to
+ * the other. A point behind the camera comes back past a right angle, which is
+ * what makes this a usable test of "out of frame" rather than only of "far to
+ * one side".
+ *
+ * Signed rather than absolute so that a claim about the two halves of the
+ * frame can be asserted as written. With magnitudes alone, "a wall under each
+ * half" is indistinguishable from both walls piled into the same half, and a
+ * test that cannot tell those apart is not testing its own sentence.
  */
 function offAxisAngle(
   pose: { bearing: number; radial: number },
@@ -129,7 +160,38 @@ function offAxisAngle(
   const z = point[1] - cameraZ;
   const along = x * Math.cos(pose.bearing) + z * Math.sin(pose.bearing);
   const across = -x * Math.sin(pose.bearing) + z * Math.cos(pose.bearing);
-  return Math.abs(Math.atan2(across, along));
+  return Math.atan2(across, along);
+}
+
+/**
+ * Where the frame's bottom and top edges really are, `distance` of horizontal
+ * travel ahead, taken from the camera the renderer uses rather than from a
+ * formula.
+ *
+ * `applyRig` writes the camera and the projection matrix builds the frustum,
+ * so unprojecting the middle of the bottom and top edges of the near plane
+ * gives a point on each edge, and the ray from the camera through it is that
+ * edge. Following the ray out is then a ratio of its own components. No
+ * tangent is taken anywhere here, which is the whole point: this has to be
+ * something `verticalReachAt` can be checked *against*, not a second copy of
+ * it written in the same idiom. The x of each NDC point is 0, so the aspect
+ * ratio cannot reach these two edges and any value serves.
+ */
+function frameEdgesFromCamera(
+  pose: CameraPose,
+  distance: number
+): { bottom: number; top: number } {
+  const camera = new PerspectiveCamera(pose.fov, 16 / 9, CAMERA_NEAR, CAMERA_FAR);
+  applyRig(camera, pose);
+  camera.updateMatrixWorld(true);
+
+  const alongEdge = (ndcY: number): number => {
+    const onEdge = new Vector3(0, ndcY, -1).unproject(camera).sub(camera.position);
+    // Rise over horizontal run, carried out to `distance` of run.
+    return camera.position.y + (distance * onEdge.y) / Math.hypot(onEdge.x, onEdge.z);
+  };
+
+  return { bottom: alongEdge(-1), top: alongEdge(1) };
 }
 
 /** The two corners of hexagon side `side`, in the plan. */
@@ -155,6 +217,39 @@ const EVERY_VOLUME: readonly { wall: number; shelf: number; volume: number }[] =
     )
   );
 
+describe('the framing helper the other tests are measured with', () => {
+  /**
+   * The arithmetic is only ever as good as the instrument. Pointing a camera
+   * down tilts the frustum, and the edges of a tilted frustum do not sit at
+   * `tan(pitch) +/- tan(fov/2)`: they sit at `tan(pitch -/+ fov/2)`, which is
+   * a different number for every pitch but zero (issue #52). At zero pitch
+   * the two agree exactly, which is why this went unnoticed through M5 and
+   * #51 and why the case below is pinned at the room level's own pitch
+   * instead of a convenient one.
+   */
+  it('agrees with the renderer’s own camera where the pitch is not zero', () => {
+    expect(ROOM_POSE.pitch).not.toBe(0);
+    const edges = frameEdgesFromCamera(ROOM_POSE, CORNER_DISTANCE);
+
+    const reach = verticalReachAt(ROOM_POSE, CORNER_DISTANCE);
+
+    expect(reach.bottom).toBeCloseTo(edges.bottom, 9);
+    expect(reach.top).toBeCloseTo(edges.top, 9);
+  });
+
+  it('agrees with it at zero pitch too, which is every other pose', () => {
+    const square = wallPose(0);
+    expect(square.pitch).toBe(0);
+    const distance = ROOM_INRADIUS - square.radial;
+    const edges = frameEdgesFromCamera(square, distance);
+
+    const reach = verticalReachAtWall(square);
+
+    expect(reach.bottom).toBeCloseTo(edges.bottom, 9);
+    expect(reach.top).toBeCloseTo(edges.top, 9);
+  });
+});
+
 describe('the room’s vantage', () => {
   it('faces the corner the first two shelved walls share, from the far side', () => {
     // Halfway between the two wall bearings, derived here rather than copied
@@ -167,8 +262,8 @@ describe('the room’s vantage', () => {
     expect(ROOM_STOP.label).toBe('room');
   });
 
-  it('sees that corner from the floor to the ceiling', () => {
-    const reach = verticalReachAt(ROOM_POSE, ROOM_CIRCUMRADIUS - ROOM_POSE.radial);
+  it('sees that corner from below its lowest shelf to above the ceiling', () => {
+    const reach = verticalReachAt(ROOM_POSE, CORNER_DISTANCE);
 
     expect(reach.bottom).toBeLessThan(SHELF_BASE_HEIGHT);
     expect(reach.top).toBeGreaterThan(ROOM_HEIGHT);
@@ -183,23 +278,39 @@ describe('the room’s vantage', () => {
 
     for (const side of DOORWAY_SIDES) {
       for (const corner of sideCorners(side)) {
-        expect(offAxisAngle(ROOM_POSE, corner)).toBeGreaterThan(reach);
+        // Either side of the axis is equally out, so the magnitude is what
+        // this one wants; the halves below are what needs the sign.
+        expect(Math.abs(offAxisAngle(ROOM_POSE, corner))).toBeGreaterThan(reach);
       }
     }
   });
 
-  it('puts a shelved wall under each half of the frame', () => {
+  it('puts a shelved wall under each half of the frame, one either side', () => {
     // The other half of the claim: not merely no doorway, but books on both
-    // sides. The corner itself is dead ahead, so each wall beside it covers
-    // its own half out to an edge of the frame.
+    // sides. Each wall runs from the corner, which is dead ahead at angle
+    // zero, out past an edge of the frame, and the two run opposite ways.
+    // Checked with the sign, so that both walls crowded into the same half
+    // would fail rather than read the same as one either side.
     const reach = halfHorizontalAngle(ROOM_POSE.fov, WIDEST_FRAMED_ASPECT);
+    const sides = SHELF_SIDES.slice(0, 2).map((side) =>
+      sideCorners(side).map((corner) => offAxisAngle(ROOM_POSE, corner))
+    );
 
-    for (const side of SHELF_SIDES.slice(0, 2)) {
-      const far = sideCorners(side).map((corner) => offAxisAngle(ROOM_POSE, corner));
+    const spans = sides.map((angles) => ({
+      inner: Math.min(...angles.map(Math.abs)),
+      outer: Math.max(...angles.map(Math.abs)),
+      // Which way the wall runs: the corner it does not share sits to one
+      // side of the axis, and `Math.sign` of the widest angle names it.
+      hand: Math.sign(angles.reduce((a, b) => (Math.abs(a) > Math.abs(b) ? a : b))),
+    }));
 
-      expect(Math.min(...far)).toBeLessThan(reach);
-      expect(Math.max(...far)).toBeGreaterThan(reach);
+    for (const span of spans) {
+      expect(span.inner).toBeLessThan(reach);
+      expect(span.outer).toBeGreaterThan(reach);
     }
+    // Each hand is -1 or +1, so a product of -1 says they are opposite, and
+    // it says it without indexing a pair the type system cannot size.
+    expect(spans.reduce((product, span) => product * span.hand, 1)).toBe(-1);
   });
 });
 

@@ -61,8 +61,13 @@ const HALF_SIDE_ANGLE = Math.PI / HEXAGON_SIDES;
  * background colour: no corridor is built yet, and a quarter of the opening
  * frame was that hole rather than a room (issue #46). Looking at the corner
  * instead puts a shelved wall under each half of the frame and both doorways
- * behind the camera's shoulders, which is also the only view that shows the
- * room turning rather than one flat wall of books.
+ * outside it, which is also the only view that shows the room turning rather
+ * than one flat wall of books.
+ *
+ * Outside it, not behind the camera: the nearer corner of each doorway is
+ * 49.1 degrees off the view axis against a frame that reaches 44.6 degrees at
+ * 16:9, so the margin is 4.5 degrees and a window wider than about 2.08:1
+ * brings the hole back. `__tests__/poses.test.ts` asserts the 16:9 case.
  *
  * It is the right place to turn from, too: every wall is then within 150
  * degrees of where a flight starts, where facing wall 0 left the wall
@@ -73,11 +78,17 @@ const ROOM_BEARING = wallBearing(0) + HALF_SIDE_ANGLE;
 /**
  * How far the room level stands from the middle of the room, *away* from the
  * corner it looks at rather than towards it. That puts the camera 2.25 m from
- * the corner, where a `CAMERA_FOV` frame reaches from 0.07 m to 2.56 m: the
- * corner's whole height, shelf run and ceiling together, with only the
- * nearest strip of floor out of view. The walls stand nearer than the corner
- * does, so towards the edges of the frame the lowest shelf runs off the
- * bottom; standing on the near side would crop every wall that way.
+ * the corner, where a `CAMERA_FOV` frame reaches from -0.01 m to 2.51 m: the
+ * corner's whole height, shelf run and ceiling together, and the floor line
+ * at its foot.
+ *
+ * Only at its foot, though. The bottom edge of the frame crosses the floor at
+ * 2.23 m of horizontal travel, so what is in view is the last two centimetres
+ * of floor before the corner and nothing nearer: the reader is looking at the
+ * room from above its floor, not across it. The walls also stand nearer than
+ * the corner does, so towards the edges of the frame the lowest shelf and the
+ * ceiling both fall outside it. Standing on the near side would crop every
+ * wall that way.
  *
  * It is also what keeps the doorways out of the frame, and the direction is
  * the one nobody guesses: backing *further* off swings them back into view,
