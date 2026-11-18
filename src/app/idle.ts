@@ -5,9 +5,9 @@
  * `window.__scriptorium.waitForIdle()` is what keeps the end-to-end suite off
  * `waitForTimeout`, and review rejects a test that sleeps on a duration
  * (`docs/testing.md` §7). It can only be sound if it accounts for every source
- * of pending work the composition knows about, which from M6 is three: the
- * camera flight, the worker client's request table, and the reader catching up
- * with the machine.
+ * of pending work the composition knows about, which from M6 is four: the
+ * camera flight, the worker client's request table, the reader catching up
+ * with the machine, and the shelf of titles being generated for the spines.
  *
  * **It is composed here rather than owned by the hook** (`docs/testing.md`
  * §7). Each source answers for itself; this joins them, and `src/main.ts`

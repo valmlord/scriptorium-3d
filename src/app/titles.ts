@@ -7,18 +7,18 @@ import type { GenerationRequest, ShelfAddress } from '@worker/client';
  * The spine titles, resolved one shelf at a time as the camera approaches and
  * abandoned when it has gone.
  *
- * **One shelf, never a room.** ADR-0005 measured a shelf of 32 titles at 14.8
- * to 45.0 ms across four machines. A room is twenty shelves, so asking for all
- * of them is between a third of a second and a second of worker time, most of
- * it for spines behind the camera. The request is therefore made for the shelf
- * the machine is at, and the one in flight is cancelled the moment the machine
- * is somewhere else: `GenerationRequest.cancel()` exists for exactly this
+ * **One shelf, never a room.** ADR-0005 holds what a shelf of 32 titles costs
+ * on each of the four machines it measured; a room is twenty of them, so
+ * asking for a room is that figure twenty times over, most of it for spines
+ * behind the camera. The request is therefore made for the shelf the machine
+ * is at, and the one in flight is cancelled the moment the machine is
+ * somewhere else: `GenerationRequest.cancel()` exists for exactly this
  * (ADR-0016), and a cancelled title is one the worker never computes.
  *
  * **A shelf is resolved at the shelf level and below.** The titles are
  * `architecture.md` §3's level of detail: "titles are resolved when the camera
  * is close enough to read them and cancelled when it is not". At the wall
- * level a spine is two centimetres of a one-point-eight metre wall and its
+ * level a spine is 42 mm of a 1.8 m wall (`@engine/constants`) and its
  * title is unreadable, and five shelves at once is five times the cost above
  * for text nobody can read. Because the machine commits on the event and the
  * camera lags (ADR-0030), the request for a shelf goes out as the flight
@@ -26,7 +26,7 @@ import type { GenerationRequest, ShelfAddress } from '@worker/client';
  * asks for.
  *
  * **A reply for a shelf the machine has left changes nothing.** That is the
- * same rule the reader turns on (ADR-0031) and it is the only thing that
+ * same rule the reader turns on (ADR-0032) and it is the only thing that
  * distinguishes a cancellation from a failure here, which is why no error
  * class is inspected: a cancelled shelf is one the machine has left, and a
  * shelf that genuinely failed is simply not recorded, so coming back to it
@@ -140,8 +140,16 @@ export function createTitleResolver(options: TitleResolverOptions): TitleResolve
           return;
         }
         forget();
-        write(shelf, titles);
-        release();
+        try {
+          write(shelf, titles);
+        } finally {
+          // The request has settled whatever the write does, and a shelf that
+          // arrives malformed is refused inside `setShelfTitles`
+          // (`@engine/atlas`). Releasing in a `finally` is what keeps that
+          // refusal from leaving `waitForIdle()` waiting on a request that is
+          // already over.
+          release();
+        }
       },
       () => {
         if (!isWanted(shelf)) {

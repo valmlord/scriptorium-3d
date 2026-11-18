@@ -30,7 +30,7 @@ import {
  * transition from `book` to `book` and the page is a component of that state
  * rather than a rung of the ladder. The reader (M6) is the projection that
  * lags behind it, exactly as the camera lags behind a descent (ADR-0030,
- * ADR-0031).
+ * ADR-0032).
  *
  * **Transitions are explicit and total.** Every one of the twenty
  * `(level, event)` pairs is either in the table below or raises
@@ -109,7 +109,7 @@ export type NavigationEvent =
    * The page to open, not a direction. A caller asking for "the next page"
    * computes it from `addressOf`, so two turns arriving in one task name two
    * pages rather than compounding into one the user never asked for — which is
-   * what makes an interrupted turn answerable at all (ADR-0031).
+   * what makes an interrupted turn answerable at all (ADR-0032).
    */
   | { readonly type: 'turn-page'; readonly page: number }
   | { readonly type: 'back' };
@@ -119,7 +119,7 @@ export type NavigationEvent =
  *
  * It is what `isLegalTransition` answers and what an `IllegalTransitionError`
  * names, while `transition` below does the construction. The two halves are
- * held together by the exhaustive test rather than by care: for all sixteen
+ * held together by the exhaustive test rather than by care: for all twenty
  * pairs, this table and whether `transition` throws must agree. Deleting an
  * entry here therefore turns a named test red, and so does deleting the branch
  * that builds the state.

@@ -16,7 +16,7 @@ import './reader.css';
  * reader asks to turn. There is no second record of where the user is, which
  * is why the only way the view can disagree with the machine is by lagging.
  *
- * **An interrupted turn is ADR-0030's model, mapped** (ADR-0031). The machine
+ * **An interrupted turn is ADR-0030's model, mapped** (ADR-0032). The machine
  * commits on the event and the view lags behind it by one generation request.
  * The one rule that makes that safe is below in `accept`: a page is written to
  * the DOM only while the machine still has that page open, so the DOM is a
@@ -275,13 +275,15 @@ export function createReader(options: ReaderOptions): Reader {
   /**
    * Write `text`, if the machine still has `address` open.
    *
-   * This is the whole of the interruption rule (ADR-0031). The DOM is a pure
-   * function of what the machine says is open, so a reply for any other page
-   * changes nothing — and it is not only the cancelled request that gets here:
-   * a page already in the client's cache resolves inside the same task as the
-   * turn that asked for it, so two turns dispatched together can land their
-   * replies in the order the user did not ask for. The guard is what makes
-   * that case a non-event rather than a page the reader is not on.
+   * **A write is guarded by the address and nothing else** (ADR-0032). The DOM
+   * is a pure function of what the machine says is open, so a reply for any
+   * other page changes nothing — and it is not only the cancelled request that
+   * gets here: a page already in the client's cache resolves inside the same
+   * task as the turn that asked for it, so two turns dispatched together can
+   * land their replies in the order the user did not ask for. Deliberately
+   * *not* also guarded on being the request in flight: a reply carrying the
+   * right text for the open page is the right text, whichever request fetched
+   * it.
    */
   function accept(
     from: GenerationRequest<string>,
@@ -291,8 +293,21 @@ export function createReader(options: ReaderOptions): Reader {
     if (!isOpen(address)) {
       return;
     }
+
+    let lines: readonly string[];
+    try {
+      // The text crossed a `postMessage` boundary, so its length is checked
+      // before anything here is written or forgotten (`./errors.ts`). Validated
+      // *first*, because a throw after `forgetPageRequest` would leave this
+      // page neither rendered nor settled, and the reader would never report
+      // itself idle again.
+      lines = pageLines(text);
+    } catch (error: unknown) {
+      refuse(from, address, error);
+      return;
+    }
+
     forgetPageRequest(from);
-    const lines = pageLines(text);
     // Zipped over the lines and looked up by row: both are `READER_ROWS` long
     // by construction, so there is nothing to guard against here.
     lines.forEach((line, row) => {
@@ -306,20 +321,27 @@ export function createReader(options: ReaderOptions): Reader {
   }
 
   /**
-   * A page that did not arrive, if the machine still has it open.
+   * A page that did not arrive, if that is still the question being asked.
    *
-   * A cancelled request rejects (ADR-0016) and a cancel is only ever sent for
-   * a page the machine has already left, so this is not the interruption path:
-   * it is the one for a generation that genuinely failed. The last page stays
-   * on screen, because a reader that blanks is harder to diagnose than one
-   * that says what happened.
+   * **A refusal is guarded by the request, not only by the address**, and that
+   * is the one place this layer needs two rules rather than one (ADR-0032). A
+   * cancellation is a fact about a *request*: the machine can leave a page and
+   * come back to it inside a single task, so by the time a cancelled request's
+   * rejection runs, its address may be open again — and reporting that page as
+   * one that could not be generated would be a reader lying about a page which
+   * is on its way. Requiring the reply to be the one still in flight is what
+   * distinguishes "this page failed" from "this request was abandoned", which
+   * is why no error class is inspected here.
+   *
+   * The last page stays on screen, because a reader that blanks is harder to
+   * diagnose than one that says what happened.
    */
   function refuse(
     from: GenerationRequest<string>,
     address: Address,
     error: unknown
   ): void {
-    if (!isOpen(address)) {
+    if (pageRequest !== from || !isOpen(address)) {
       return;
     }
     forgetPageRequest(from);
@@ -388,13 +410,15 @@ export function createReader(options: ReaderOptions): Reader {
    * Dispatch a turn `step` pages from the page the machine has open, if there
    * is such a page.
    *
-   * The page it turns from is the machine's and not the one on screen, which
-   * is the same rule as everywhere else here: two clicks inside one task turn
-   * two pages, because the first dispatch has already moved the machine by the
-   * time the second is read (ADR-0031).
+   * The page it turns from is read out of the machine rather than out of this
+   * module's own copy of it, so two clicks inside one task turn two pages.
+   * Reading `open` would give the same answer today, because a dispatch
+   * notifies its listeners before it returns — but that is an invariant of
+   * `@state` that nothing states, and the machine is the source of truth
+   * (`docs/architecture.md` §4), so it is asked directly.
    */
   function turnBy(step: number): void {
-    const here = open;
+    const here = addressOf(navigation.state);
     if (here === null) {
       return;
     }

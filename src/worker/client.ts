@@ -1,4 +1,4 @@
-import { BOOKS_PER_SHELF, LIBRARY_SIZE, fromLinear } from '@core/address';
+import { BOOKS_PER_SHELF, LIBRARY_SIZE, PAGE_LENGTH, fromLinear } from '@core/address';
 import type { Address, BookAddress } from '@core/address';
 import { GenerationCache } from './cache';
 import {
@@ -594,6 +594,19 @@ class BrowserWorkerAdapter implements GenerationWorkerLike {
 function takePage(response: ResultResponse): Taken<string> {
   if (response.kind !== 'page') {
     return wrongKind('page', response.kind);
+  }
+  // A page is `PAGE_LENGTH` characters (SPEC §1), and `response.ts` narrows
+  // the field to a string without measuring it. Refused here, where every
+  // other unusable reply is refused, so that a caller gets a
+  // `MalformedResponseError` naming the lengths instead of 3199 characters
+  // that lay out as a grid with one gap nobody would see. It is reachable only
+  // from a main thread and a worker built from different code, which is the
+  // skew `response.ts`'s own header names.
+  if (response.text.length !== PAGE_LENGTH) {
+    return {
+      ok: false,
+      detail: `a page of ${String(response.text.length)} characters, and a page is ${String(PAGE_LENGTH)}`,
+    };
   }
   return { ok: true, value: response.text };
 }
