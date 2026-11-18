@@ -2365,6 +2365,18 @@ the worker is still generating, and a turn superseded by a cache hit in its own 
   left changes nothing. Neither the reader nor the title resolver inspects an error class to tell a
   cancellation from a failure, because the question "is this still what the machine is asking for"
   answers both.
+- **A shelf the atlas refuses goes to the console, and it is the only `console` call in `src/`.** The
+  atlas takes exactly `BOOKS_PER_SHELF` titles beginning at a shelf boundary and the client fans a
+  shelf out over exactly that many requests, so a refusal is not a condition of the library but the
+  two sides having stopped agreeing — a bug on this side of the boundary. The reader sees nothing of
+  it: a spine cannot show an error, the shelf stays undrawn and is asked for again when the camera
+  next approaches, which is blank spines rather than a wrong title. But blank spines with no trace
+  get attributed to generation or to WebGL, so the resolver reports the shelf together with the
+  error (`onFailure` is required, not optional, because the composition root is the only party that
+  could decide) and `src/main.ts` writes it out with the wall, the shelf and a bounded prefix of the
+  room's name, bounded because a room name runs to 4975 digits. `e2e/reader.spec.ts` asserts a clean
+  console over the whole reading flow, so this line appearing in a run is a failed test rather than
+  noise someone has to notice.
 - A turn whose page genuinely fails to generate leaves the last page on screen and says so in the
   status line. That branch is not reachable from the interface in M6 — every address the machine
   produces is valid and the worker answers every message exactly once — so it carries no test, and

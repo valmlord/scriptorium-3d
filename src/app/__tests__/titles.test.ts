@@ -166,10 +166,11 @@ function goTo(navigation: Navigation, to: ShelfAddress, volume?: number): void {
  * refusal. A silent default would hide exactly the defect these tests exist
  * for, so an unexpected refusal is rethrown and fails the test that caused it.
  */
-function failLoudly(error: unknown): never {
+function failLoudly(shelf: ShelfAddress, error: unknown): never {
+  const where = `wall ${String(shelf.wall)} shelf ${String(shelf.shelf)}`;
   throw error instanceof Error
     ? error
-    : new Error(`the atlas refused a shelf: ${String(error)}`);
+    : new Error(`the atlas refused ${where}: ${String(error)}`);
 }
 
 /** A resolver over a scripted source and a recording room. */
@@ -492,8 +493,8 @@ describe('the resolver as a source of pending work', () => {
       navigation,
       source,
       destination: { room: refusing },
-      onFailure: (error) => {
-        reported.push(error);
+      onFailure: (shelf, error) => {
+        reported.push({ shelf, error });
       },
     });
     goTo(navigation, SHELF);
@@ -502,7 +503,7 @@ describe('the resolver as a source of pending work', () => {
     source.forShelf(SHELF).resolve(titlesOf(SHELF));
 
     await idle;
-    expect(reported).toEqual([refused]);
+    expect(reported).toEqual([{ shelf: SHELF, error: refused }]);
     expect(resolver.isIdle()).toBe(true);
   });
 

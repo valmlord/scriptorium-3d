@@ -88,8 +88,14 @@ export interface TitleResolverOptions {
    * which is a console line nobody owns in a browser and a failed run in the
    * suite. `ResourceRegistry.disposeAll` can be loud to its caller because it
    * has one; this cannot, so the owner is passed in.
+   *
+   * The shelf is passed with the error because the error alone does not say
+   * which one it was. The atlas refuses on a count and a slot, so its message
+   * names a number of titles and not a place on a wall, and the resolver is
+   * the only party that still holds the address by the time the refusal is
+   * reported.
    */
-  readonly onFailure: (error: unknown) => void;
+  readonly onFailure: (shelf: ShelfAddress, error: unknown) => void;
 }
 
 /** The title resolver, watching the machine. */
@@ -216,7 +222,7 @@ export function createTitleResolver(options: TitleResolverOptions): TitleResolve
           // were and approaching it again asks for it again. That is the same
           // outcome as a generation that failed, which is the other way a
           // shelf does not arrive.
-          onFailure(error);
+          onFailure(shelf, error);
         } finally {
           // The request has settled whatever the write did, so the waiters are
           // released either way: a refused shelf must not leave

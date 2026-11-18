@@ -1,3 +1,4 @@
+import { roomToName } from '@core/address';
 import { createViewer } from '@engine/viewer';
 import { GenerationClient, createGenerationWorker } from '@worker/client';
 import { createReader } from '@ui/reader';
@@ -69,23 +70,50 @@ const titles = createTitleResolver({
   destination: viewer,
   /**
    * A shelf the atlas will not take, reported here because this is the only
-   * place that could decide what to do with it, and the honest answer in M6 is
-   * nothing: a spine cannot show an error, and a `console` call here would be
-   * the only one in `src/`. The shelf stays undrawn and is asked for again the
-   * next time the camera approaches it, so the consequence is a wall of blank
-   * spines rather than a silent wrong title, which is the direction this
-   * project errs in.
+   * place that could decide what to do with it. The reader sees nothing: a
+   * spine cannot show an error, the shelf stays undrawn, and it is asked for
+   * again the next time the camera approaches it, so the consequence is a wall
+   * of blank spines rather than a silent wrong title, which is the direction
+   * this project errs in.
+   *
+   * What it is not is silent to whoever is working on the thing. The condition
+   * is a bug on this side of the boundary - the client fans a shelf out over
+   * exactly the number of requests the atlas requires, so a refusal means one
+   * of the two stopped agreeing - and a bug that leaves blank spines and no
+   * trace is one that gets attributed to generation or to WebGL. So it goes to
+   * the console, which is the only `console` call in `src/`, and the e2e suite
+   * asserts a clean console over the reading flow (`e2e/reader.spec.ts`), so
+   * this line going off in a run is a failure rather than noise.
    *
    * It is a reported failure rather than an unhandled rejection because an
-   * unhandled rejection is a console line nobody owns and a red test run, and
-   * because the condition is a bug on this side of the boundary: the client
-   * fans a shelf out over exactly the number of requests the atlas requires.
-   * The frame instrumentation of M10 is where this gets somewhere to go.
+   * unhandled rejection is a console line nobody owns and a red test run.
+   * The frame instrumentation of M10 is where this gets somewhere better.
    */
-  onFailure: () => {
-    // Deliberately nothing. See above.
+  onFailure: (shelf, error) => {
+    console.error(
+      `the atlas refused the titles of wall ${String(shelf.wall)}, shelf ${String(shelf.shelf)} of room ${describeRoom(shelf.room)}`,
+      error
+    );
   },
 });
+
+/**
+ * How much of a room's name a console line carries.
+ *
+ * A name is base-36 and a room index runs to 4975 digits (`@core/address`), so
+ * the whole name is not a thing to put in a console line: it would bury the
+ * rest of the message and the digits past the first few identify nothing a
+ * person can act on. The length is reported alongside, which is what makes two
+ * truncated names distinguishable.
+ */
+const REPORTED_ROOM_NAME_DIGITS = 12;
+
+function describeRoom(room: bigint): string {
+  const name = roomToName(room);
+  return name.length <= REPORTED_ROOM_NAME_DIGITS
+    ? name
+    : `${name.slice(0, REPORTED_ROOM_NAME_DIGITS)} (${String(name.length)} digits)`;
+}
 
 installControls(canvas, viewer, choreography);
 viewer.start();
