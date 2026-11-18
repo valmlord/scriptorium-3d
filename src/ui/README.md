@@ -19,7 +19,7 @@ DOM overlays and interface. Reads `@state`, emits navigation events.
   elements of real DOM text: selectable, copyable and readable by a screen reader, which a texture
   is not. It is a projection of `@state` and holds no record of its own, and a page is written to
   the DOM only while the machine still has that page open, which is what makes an interrupted turn
-  safe (ADR-0031). The generation client is injected rather than imported, because `@app` owns it
+  safe (ADR-0032). The generation client is injected rather than imported, because `@app` owns it
   and the title resolver shares one cache with the reader.
 - `reader.css` — its styles. Two rules are load-bearing rather than decorative: the monospace stack,
   without which the grid is 80 ragged rows, and `white-space: pre`, without which a line of the
@@ -34,7 +34,7 @@ chrome is in English until then; the library's own text is always Cyrillic (SPEC
 
 - `three` — the UI does not reach into the scene. Type-only imports of it are allowed
 - `gsap` — timelines belong to `@motion` (ADR-0004). A page turn is therefore not an animation here;
-  if it ever becomes one it is a `@motion` timeline driven from `@app` (ADR-0031)
+  if it ever becomes one it is a `@motion` timeline driven from `@app` (ADR-0032)
 - `@core`'s generation surface — `prf`, `feistel`, `library` and the `index` barrel (ADR-0029)
 - Everything in `@worker` except `client.ts`: the protocol, the handler, the message loop, the cache
   and the barrel that re-exports them are the thread's own business. `errors.ts` is among them, which

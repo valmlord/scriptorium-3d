@@ -114,7 +114,7 @@ stays silent. A lint rule nobody has watched fail is not a rule.
   being silently ignored.
 - The open **page** is a component of the `book` state rather than a fifth level, because a turn moves no
   camera (SPEC §6). Turning is interruptible, and it is interruptible by ADR-0030's rules with the DOM in
-  the place of the camera rig rather than by a second model of its own (ADR-0031).
+  the place of the camera rig rather than by a second model of its own (ADR-0032).
 - The URL is written from the FSM and parsed into it. No other code touches `location`.
 
 ## 5. Determinism

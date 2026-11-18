@@ -238,7 +238,7 @@ describe('turning a page inside a book', () => {
 
   it('turns from one page to another without passing through the first', () => {
     // The event names a page rather than a direction, so two turns arriving
-    // together name two pages and the second one wins (ADR-0031).
+    // together name two pages and the second one wins (ADR-0032).
     const navigation = createNavigation(ROOM);
     navigation.dispatchAll(eventsTo(navigation.state, STATES.book));
 

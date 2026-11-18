@@ -1930,6 +1930,18 @@ what the built bundle contains, and the lint rule cannot help, because it is phr
 shape as ADR-0028's open question about test durations, and it wants an issue of its own rather than a
 sentence here.
 
+**Closed by M6, and the prediction was exact.** It happened as written: `src/main.ts` imported
+`@worker/client`, `cache.ts` took `TITLE_LENGTH` from the barrel, and `DOMAIN_TAG` appeared in the
+production main-thread chunk. The detector worked — a person read this paragraph, in the judge round of
+#44 — which is also the argument against leaving one that way. The move named above is done:
+`TITLE_LENGTH` is in `@core/format` and `TITLE_SHIFT` stayed behind in `library.ts`, because the
+derivation is generation arithmetic and only the constant was ever the problem. And the guard that was
+missing exists: `src/__tests__/production-bundle.test.ts` asserts that the main-thread chunk does not
+contain `DOMAIN_TAG` and that the worker's does, keyed on the constant itself rather than on a copy of
+its spelling. **What it closes is a transitive closure, which is the part no lint rule can reach**: every
+edge of `main.ts` to `@worker/client` to `cache.ts` to `@core/index` is legal on its own, and only the
+path is not. ADR-0032 records the measurement.
+
 **Consequence.** `architecture.md` §1's claim about itself is true again, and it is true of eight blocks
 rather than five, under two rules rather than one. `src/app/url.ts` imports `@core/address`,
 `@core/errors` and `@core/format` instead of the barrel, and `src/worker/client.ts`, `protocol.ts` and
@@ -2238,7 +2250,7 @@ issue and acted on from the test side only.
 
 ---
 
-## ADR-0031 — A page turn is ADR-0030's interruption model, with the DOM in the place of the rig
+## ADR-0032 — A page turn is ADR-0030's interruption model, with the DOM in the place of the rig
 
 **Decision.** Page turning reuses ADR-0030 rather than answering interruption a second time. The
 correspondence is written out here because it is not quite term for term, and the one rule of
@@ -2294,6 +2306,25 @@ shows a page it has received whole, and `aria-busy` on the page element says whe
 the same. The machine and the view may disagree about **which page is on screen**, because that
 disagreement is what a generation is. They may not disagree about **which page is being opened**.
 
+**Two guards, not one, and the difference is what this record got wrong first.** The sentence above
+is a statement about the whole reader — the 80 lines, the status line and `aria-busy` together — and
+the rule "write only while the machine has that page open" does not carry it alone. A write is about
+a page, so the address answers it. A **refusal** is about a _request_: a cancelled request rejects
+(ADR-0016), and the machine can leave a page and come back to it inside a single task, so by the
+time that rejection runs its address may be open again. Guarded on the address alone, the reader
+then reports a page that is generating fine as one that could not be generated, and sets
+`aria-busy` to `false` while the article still holds the previous page — the exact instant this
+paragraph says cannot exist. It was reached in Chromium with three ordinary clicks in one task
+(`next`, `next`, `previous`), by the judge round of this milestone, against a reader that had
+implemented this record faithfully.
+
+So `refuse` requires the reply to be the request still in flight as well, and `accept` deliberately
+does not: a reply carrying the right text for the open page is the right text, whichever request
+fetched it. One rule for the DOM, two conditions for the refusal, and the reason they differ is
+that a cancellation is not a fact about a page. That is also why neither path inspects an error
+class — "is this still what the machine is asking for" answers both, which is the only part of the
+original single-rule table that survived unchanged.
+
 **The superseded reply is not a hypothetical.** It is the ordinary case of turning back and forth: a
 page the client has already cached resolves inside the same task as the turn that asked for it
 (`cache.ts` is read before the boundary, ADR-0005), so two turns dispatched together produce two
@@ -2327,4 +2358,29 @@ the worker is still generating, and a turn superseded by a cache hit in its own 
 - A turn whose page genuinely fails to generate leaves the last page on screen and says so in the
   status line. That branch is not reachable from the interface in M6 — every address the machine
   produces is valid and the worker answers every message exactly once — so it carries no test, and
-  that is stated here rather than implied by its absence.
+  that is stated here rather than implied by its absence. What it must not do is **strand** the
+  reader: the length of an arriving page is therefore checked before anything is written or
+  forgotten, and a page of the wrong length is refused at the worker boundary that owns malformed
+  replies (`takePage` in `client.ts`) rather than thrown inside a `then`, where it would have become
+  an unhandled rejection with `settled` left behind and `waitForIdle()` waiting for a page that was
+  never coming.
+- **The reader has no unit tests, and cannot have them as the project stands.** `vitest` runs in the
+  `node` environment and no DOM environment is installed, so `src/ui/reader.ts` is reachable only
+  from Playwright: the whole of the rule above rests on the two end-to-end scenarios that cover the
+  two arrival orders, and the third ordering — a cancelled request whose page is open again — was
+  found by reading rather than by a test, then pinned by one. That is the cost of this layer having
+  no test environment, and it is recorded here rather than left to be discovered a third time.
+- **M6 is the change that put `core`'s generation surface into the main-thread bundle, and ADR-0029
+  predicted exactly that.** Its open paragraph said the shipped bundle contained no `getPage`
+  "because neither `app/url.ts` nor the worker client is in the entry graph yet", and named a person
+  reading that paragraph as the only detector. `src/main.ts` now imports `@worker/client`, which
+  imports `cache.ts`, which needed `TITLE_LENGTH` from `library.ts` — one constant, and with it
+  `prf`, `feistel`, `library` and `@noble/hashes`, measured as `DOMAIN_TAG` appearing in the
+  production main-thread chunk. Why no rule caught it: the layer rule decides one import edge at a
+  time, and every edge on that path is legal — `@app` may import `@worker/client`, and `@worker` may
+  import the barrel because the worker is the layer that generates. Only the transitive closure is
+  illegal, and a lint rule cannot see a closure. `TITLE_LENGTH` has moved beside `FORMAT_VERSION` in
+  `@core/format`, which is the move ADR-0029 itself named, and the closure is now checked at the
+  bundle in `src/__tests__/production-bundle.test.ts`: the main-thread chunk must not contain
+  `DOMAIN_TAG` and the worker's must. ADR-0029's open paragraph is closed by that test rather than
+  by this sentence.
