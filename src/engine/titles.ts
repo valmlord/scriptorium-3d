@@ -97,6 +97,17 @@ export interface SpineTitleAtlasOptions {
   readonly material: MeshStandardMaterial;
   /** The room's registry, which owns the texture once it exists. */
   readonly registry: ResourceRegistry;
+  /**
+   * Where the canvas comes from. The document, unless a caller says otherwise.
+   *
+   * Injected for the same reason `GenerationClient` takes a worker rather than
+   * making one: everything this module *decides* — which cell a spine samples,
+   * which shelf is redrawn, what is released on unload — is decided around the
+   * drawing rather than inside it, and a test of those decisions should not
+   * need a browser (`docs/testing.md` §1). `__tests__/titles.test.ts` passes a
+   * canvas that records what was drawn on it.
+   */
+  readonly createCanvas?: () => HTMLCanvasElement;
 }
 
 /** What the atlas allocates on the device, once there is a title to draw. */
@@ -111,6 +122,7 @@ export function createSpineTitleAtlas(
   options: SpineTitleAtlasOptions
 ): SpineTitleAtlas {
   const { spines, material, registry } = options;
+  const createCanvas = options.createCanvas ?? fromDocument;
   const allocator = createShelfRowAllocator();
   let device: AtlasDevice | null = null;
 
@@ -124,6 +136,23 @@ export function createSpineTitleAtlas(
       // the atlas as it was rather than part-written.
       const shelf = shelfIndexOfFirstSlot(firstSlot);
       assertShelfTitleCount(titles.length);
+
+      if (allocator.rowOf(shelf) !== undefined) {
+        // Already drawn, and its spines already point at it. A title is a pure
+        // function of its address (SPEC §4), so redrawing it would change
+        // nothing and cost a whole-atlas upload: three.js has no partial path
+        // for a `CanvasTexture`, so `needsUpdate` sends all 1024 by 2048
+        // pixels. Measured on an Apple M4, Chromium: drawing a shelf's 32
+        // cells is 0.0 ms median and uploading the atlas 3.4 ms, and the
+        // animation callback carrying one goes from 0.1 ms to 3.2-4.4 ms.
+        //
+        // This is what makes `./atlas.ts`'s "a row is never redrawn while it
+        // is held" true rather than aspirational, and it is why a caller may
+        // ask for the same shelf as often as it likes: `@app`'s resolver does,
+        // on every navigation event inside a shelf, and that re-ask is what
+        // redraws a shelf the atlas has since evicted.
+        return;
+      }
 
       const atlas = device ?? materialize();
       device = atlas;
@@ -143,7 +172,7 @@ export function createSpineTitleAtlas(
 
   /** Create the canvas, the texture and the instance buffer, and patch the material. */
   function materialize(): AtlasDevice {
-    const canvas = document.createElement('canvas');
+    const canvas = createCanvas();
     canvas.width = ATLAS_WIDTH;
     canvas.height = ATLAS_HEIGHT;
     const context = canvas.getContext('2d');
@@ -157,9 +186,18 @@ export function createSpineTitleAtlas(
 
     const texture = registry.track(new CanvasTexture(canvas));
     texture.colorSpace = SRGBColorSpace;
-    // No mipmaps: a mipmap of this atlas averages across cell boundaries, so a
-    // spine at a distance would show the smear of its neighbours' titles. It
-    // also keeps a non-power-of-two atlas legal without a resize.
+    // No mipmaps: a mip level whose footprint is wider than a 32 px cell
+    // averages across cell boundaries, so a distant spine would show the
+    // smear of its neighbours' titles rather than its own. `LinearFilter` is
+    // then required, because the default minification filter wants the chain
+    // that no longer exists.
+    //
+    // The price, which is real and accepted: minifying without a chain
+    // aliases, so a title shimmers as the camera moves and 640 instances
+    // sample the atlas with poorer cache locality. The level of detail this
+    // project budgets is on *generation* (`architecture.md` §3) and that is
+    // handled by resolving a shelf only at shelf level and below; sampling has
+    // none, and a mip chain built per cell is what it would take.
     texture.generateMipmaps = false;
     texture.minFilter = LinearFilter;
 
@@ -181,14 +219,22 @@ export function createSpineTitleAtlas(
   }
 }
 
+/** The canvas the atlas draws into when nobody has said otherwise. */
+function fromDocument(): HTMLCanvasElement {
+  return document.createElement('canvas');
+}
+
 /**
  * Read the map at the instance's own offset instead of at the texture's
  * origin.
  *
- * Two insertions and one replacement, each at an `#include` three.js resolves
- * after this hook runs. The cell's span is written in as a literal because the
- * atlas has one shape for the life of the program (`./atlas.ts`); a uniform
- * would be a second place for the same two numbers to live.
+ * Three insertions and one replacement, each at an `#include` three.js
+ * resolves after this hook runs: the attribute and its varying into the vertex
+ * shader, the assignment where the uvs are computed, the varying into the
+ * fragment shader, and the map read itself replaced. The cell's span is
+ * written in as a literal because the atlas has one shape for the life of the
+ * program (`./atlas.ts`); a uniform would be a second place for the same two
+ * numbers to live.
  */
 function patchShader(shader: { vertexShader: string; fragmentShader: string }): void {
   shader.vertexShader = shader.vertexShader

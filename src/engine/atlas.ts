@@ -21,13 +21,24 @@ import { SPINES_PER_ROOM } from './slots';
  * that most of them have nothing to draw.
  *
  * **Seven shelves of a room's twenty, because the camera visits one at a
- * time.** ADR-0005 measured a shelf of 32 titles at 14.8 to 45.0 ms, so all
- * twenty at once is a stall anyone can see and is not what the atlas is sized
- * for: the resolver asks for the shelf the camera is at and cancels what it
- * has left behind, and the atlas keeps the last seven so that going back up a
- * wall and down again redraws nothing. A room's worth of cells would be
- * 20 rows and 23 MB of canvas for titles nineteen twentieths of which are
- * behind the camera.
+ * time.** Generating all twenty at once is the stall ADR-0005 measured and is
+ * not what the atlas is sized for: the resolver asks for the shelf the camera
+ * is at and cancels what it has left behind. What the seven rows buy is that a
+ * wall holds five shelves (`SHELVES_PER_WALL`), so walking one up and down
+ * never displaces a row, and a displaced row costs a redraw rather than a
+ * regeneration — the worker's cache holds a whole room of titles
+ * (`@worker/cache`).
+ *
+ * **It is not sized to save the redraw, which is free.** Measured on an Apple
+ * M4 in Chromium: drawing a shelf's 32 cells is 0.0 ms median and 0.2 ms at
+ * worst, while uploading the atlas is 3.4 ms, because three.js has no partial
+ * upload for a `CanvasTexture`. So rows are cheap to fill and the *atlas* is
+ * what is expensive to send, and the figure that matters is how often it is
+ * sent rather than how often a cell is painted: `titles.ts` sends it once per
+ * shelf acquired and never for a shelf it already holds. Eight rows of 256
+ * pixels is 8.4 MB on the device and about as much again for the canvas that
+ * backs it; a room's worth would be 21 rows and 22.0 MB, for titles nineteen
+ * twentieths of which are behind the camera.
  */
 
 /** Cell width in pixels: across the spine, where nothing is drawn but ground. */

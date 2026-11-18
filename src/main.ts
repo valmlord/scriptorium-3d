@@ -74,7 +74,7 @@ viewer.start();
 
 /**
  * Pay the cold-start cost on a page nobody is waiting for (ADR-0005): the
- * first `getPage` of a fresh worker measured up to 12.1 ms, roughly eight
+ * first `getPage` of a fresh worker measured up to 12.4 ms, roughly eight
  * times a warm one.
  *
  * The rejection is caught and deliberately nothing is done with it. A worker
