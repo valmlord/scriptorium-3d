@@ -213,6 +213,16 @@ export function createSpineTitleAtlas(
 
     material.map = texture;
     material.onBeforeCompile = patchShader;
+    // three.js keys its program cache on the material's parameters and not on
+    // `onBeforeCompile`, so a patched material and an unpatched one whose
+    // parameters match would share a compiled program - whichever compiled
+    // first. Nothing in the room matches today (this is the only mesh that is
+    // instanced, instance-coloured and mapped at once), so this is a trap for
+    // the next mapped `InstancedMesh` rather than a live bug, and it is two
+    // lines to close now against a wall of wrongly-sampled spines to debug
+    // later. The key is constant because every room's atlas is patched the
+    // same way.
+    material.customProgramCacheKey = (): string => 'spine-title-atlas';
     material.needsUpdate = true;
 
     return { context, texture, offsets };
