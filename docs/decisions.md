@@ -2351,18 +2351,26 @@ the worker is still generating, and a turn superseded by a cache hit in its own 
   table, the reader, and the title resolver (`docs/testing.md` §7). The composition is
   `src/app/idle.ts`, and the property that needed a test is that one pass over the sources is not
   an answer — a page arriving leaves the client quiet and the reader writing.
-- **What the atlas costs to send, which is the figure the redraw rule rests on.** Measured in the
-  built application on an Apple M4, Chromium through Playwright 1.62.1, Node v22.23.1: drawing a
-  shelf's 32 cells is 0.0 ms median and 0.2 ms at worst, while uploading the 1024 by 2048 canvas is
-  3.4 ms, because three.js has no partial upload for a `CanvasTexture`. An animation callback
-  carrying one goes from a 0.1 ms median to somewhere between 3 and 7 ms: three runs of the same
-  measurement on the same machine landed at 4.4, 3.3 and 6.6 ms, so the order of magnitude
-  reproduces and the endpoints do not, and this is the only place that states the range. So
-  `engine/titles.ts` leaves a shelf it already holds alone, and `app/titles.ts` asks the atlas what it holds before fanning a shelf out
-  over 32 cache reads, each of which renders a key from the room's linear index: 2.31 ms of `bigint`
-  work per navigation event at a room of 4975 digits, which is the room a deep link reaches (M8).
-  After both, a page turn costs no upload and a 0.1 ms median callback, and the first shelf of a room
-  costs one callback of 9.2 to 9.6 ms while the camera is still flying.
+- **What the atlas costs to send, which is the figure the redraw rule rests on. This bullet is the
+  only place any of these numbers is stated; the code and the tests cite it and restate nothing.**
+  Measured in the built application on an Apple M4, Chromium through Playwright 1.62.1, Node
+  v22.23.1. Drawing a shelf's 32 cells is 0.0 ms median and 0.2 ms at worst. Sending the atlas is
+  the expensive half, because three.js has no partial upload for a `CanvasTexture` and `needsUpdate`
+  sends all 1024 by 2048 pixels: an animation callback carrying one goes from a 0.1 ms median to
+  between 3 and 7 ms, three runs of the same measurement on the same machine landing at 4.4, 3.3 and
+  6.6 ms. **The order of magnitude reproduces and the endpoints do not**, which is why there is no
+  point value here for either the callback or the upload inside it - an earlier draft of this bullet
+  kept "3.4 ms" for the upload beside the range for the callback that contains it, and the two could
+  not both be right. Milliseconds where a turn costs tenths is the whole of what the rule needs.
+  So `engine/titles.ts` leaves a shelf it already holds alone, and `app/titles.ts` asks the atlas
+  what it holds before fanning a shelf out over 32 cache reads, each of which renders a key from the
+  room's linear index. That fan-out is 2.4 to 3.8 ms of `bigint` work per navigation event at the
+  deepest room, median 3.1 over nine runs under `vite-node` (the same non-reproducing shape, re-taken
+  because two copies of it had drifted to 2.31 and 2.47), against tens of nanoseconds for asking the
+  atlas which shelves it holds. The room is the one a deep link reaches (M8): its index is 4975
+  decimal digits, and its name, which is what a URL and a console line carry, is 3197 base-36
+  characters. After both rules, a page turn costs no upload and a 0.1 ms median callback, and the
+  first shelf of a room costs one callback of 9.2 to 9.6 ms while the camera is still flying.
 - The same rule serves the spine titles: a shelf of titles that arrives for a shelf the machine has
   left changes nothing. Neither the reader nor the title resolver inspects an error class to tell a
   cancellation from a failure, because the question "is this still what the machine is asking for"
@@ -2376,7 +2384,7 @@ the worker is still generating, and a turn superseded by a cache hit in its own 
   get attributed to generation or to WebGL, so the resolver reports the shelf together with the
   error (`onFailure` is required, not optional, because the composition root is the only party that
   could decide) and `src/main.ts` writes it out with the wall, the shelf and a bounded prefix of the
-  room's name, bounded because a room name runs to 4975 digits. `e2e/reader.spec.ts` asserts a clean
+  room's name, bounded because the last room's name is 3197 characters. `e2e/reader.spec.ts` asserts a clean
   console over the whole reading flow, so this line appearing in a run is a failed test rather than
   noise someone has to notice.
 - A turn whose page genuinely fails to generate leaves the last page on screen and says so in the
