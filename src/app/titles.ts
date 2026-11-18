@@ -170,17 +170,19 @@ export function createTitleResolver(options: TitleResolverOptions): TitleResolve
       // Nothing to generate and nothing to draw. Asked here rather than left
       // to the atlas because the fan-out happens first: a shelf is 32 calls
       // through the client's cache, and each one renders a cache key from the
-      // room's linear index. At room 0 that is tenths of a microsecond; at a
-      // room of 4975 digits, which is what a deep link reaches (M8), the 32
-      // keys measured 2.47 ms of `bigint` work against 0.003 ms for this
-      // check, on an Apple M4. The atlas refusing to redraw saves the upload;
-      // this saves the asking.
+      // room's linear index, which at the depth a deep link reaches (M8) is
+      // milliseconds of `bigint` work against nanoseconds for this check.
+      // ADR-0032 holds both figures. The atlas refusing to redraw saves the
+      // upload; this saves the asking.
       //
-      // Released because this path ends idle. `abandon()` cancels and forgets
-      // but does not release, and `whenAllIdle` waits on the promise it has
-      // already taken rather than re-reading `isIdle()` (`./idle.ts`), so a
-      // source that goes idle without releasing strands whoever is waiting.
-      release();
+      // Nothing is released here, and that is deliberate: this path is only
+      // reached with a shelf in flight or with nothing in flight at all. With
+      // nothing in flight there is no waiter to release, because `whenIdle()`
+      // answers immediately while the resolver is idle; with a shelf in
+      // flight, `abandon()` above has just cancelled it, a cancelled request
+      // rejects (ADR-0016), and its own handler releases. A `release()` here
+      // was tried and no mutation could make it matter, which is the same
+      // ground ADR-0030 removed such a check from the flight on.
       return;
     }
     ask(wanted);
@@ -299,15 +301,26 @@ export function createTitleResolver(options: TitleResolverOptions): TitleResolve
   }
 
   /**
-   * Release the idle waiters.
+   * Release the idle waiters, if the resolver is in fact idle.
    *
-   * Unconditional, because every call site below is a settlement: the shelf
-   * arrived, or it failed, or the machine left it and it was abandoned. A
-   * guard here asking whether the resolver is idle could not fail from any of
-   * them, and a check nobody has watched fail is this project's recurring
-   * defect (ADR-0030's own note on the matter).
+   * The guard is load-bearing and has been watched firing. A settlement is not
+   * the same thing as the resolver being idle: cancelling rejects (ADR-0016),
+   * so a shelf the camera has left settles *after* the next shelf has been
+   * asked for, and that handler reaches here with 32 titles in flight. Without
+   * the guard it hands every waiter an answer that is wrong, which contradicts
+   * `whenIdle`'s own promise above.
+   *
+   * It survived unguarded only because `whenAllIdle` re-reads the list after
+   * each settlement and takes another turn (`./idle.ts`); a caller awaiting
+   * this promise directly got the false answer. The reader and the worker
+   * client both guard their release the same way, and this was the one source
+   * that did not. "keeps a waiter waiting when the shelf it cancelled settles
+   * under a newer one" in the tests is the case.
    */
   function release(): void {
+    if (!resolver.isIdle()) {
+      return;
+    }
     for (const resolve of idleWaiters.splice(0)) {
       resolve();
     }

@@ -173,6 +173,23 @@ function failLoudly(shelf: ShelfAddress, error: unknown): never {
     : new Error(`the atlas refused ${where}: ${String(error)}`);
 }
 
+/**
+ * Whether `promise` has resolved, after draining the microtask queue.
+ *
+ * Five turns, the same apparatus as `idle.test.ts`: a waiter that is released
+ * one or two microtasks late would otherwise read as a waiter never released.
+ */
+async function hasSettled(promise: Promise<unknown>): Promise<boolean> {
+  let settled = false;
+  void promise.then(() => {
+    settled = true;
+  });
+  for (let turn = 0; turn < 5; turn += 1) {
+    await Promise.resolve();
+  }
+  return settled;
+}
+
 /** A resolver over a scripted source and a recording room. */
 function harness(): {
   navigation: Navigation;
@@ -237,9 +254,9 @@ describe('which shelf is asked for', () => {
   it('does not ask again for a shelf the atlas is still holding', async () => {
     // The atlas is the authority on what is drawn, so it is asked rather than
     // remembered. Each ask is 32 calls through the client's cache and each one
-    // renders a key from the room's linear index: at a room of 4975 digits,
-    // which is what a deep link reaches, that measured 2.31 ms of `bigint`
-    // work per navigation event on an Apple M4.
+    // renders a key from the room's linear index, which is milliseconds of
+    // `bigint` work per navigation event at the depth a deep link reaches.
+    // ADR-0032 holds the measurement; this file does not restate it.
     const { navigation, source } = harness();
     goTo(navigation, SHELF, 3);
     source.forShelf(SHELF).resolve(titlesOf(SHELF));
@@ -270,6 +287,40 @@ describe('which shelf is asked for', () => {
     goTo(navigation, SHELF, 3);
 
     expect(inFlight.cancelled).toBe(true);
+    await idle;
+    expect(resolver.isIdle()).toBe(true);
+  });
+
+  it('keeps a waiter waiting when the shelf it cancelled settles under a newer one', async () => {
+    // `whenIdle()` promises the next moment nothing is being generated, and a
+    // superseded reply is not that moment. Cancelling rejects (ADR-0016), so
+    // the departed shelf's rejection arrives after the next shelf has already
+    // been asked for: it finds itself unwanted, `forgetIfCurrent` leaves the
+    // newer request's record alone, and releasing there would hand the waiter
+    // an answer with 32 titles still in flight.
+    //
+    // It is the resolver's `release()` guard that this drives, and the guard
+    // is not decoration: the reader and the worker client both have one, this
+    // was the one source without, and `whenAllIdle` only papered over it by
+    // re-reading the list after every settlement (`./idle.ts`).
+    const { navigation, source, resolver } = harness();
+    goTo(navigation, SHELF);
+    // Taken before the cancellation, because `forShelf` only hands back a
+    // request that is still in flight.
+    const abandoned = source.forShelf(SHELF);
+    const idle = resolver.whenIdle();
+
+    goTo(navigation, OTHER_SHELF);
+
+    expect(abandoned.cancelled).toBe(true);
+    expect(await hasSettled(idle)).toBe(false);
+    expect(resolver.isIdle()).toBe(false);
+
+    // And it is the arrival of the shelf actually being waited for that ends
+    // the wait, which is what makes the assertion above a guard rather than a
+    // deadlock.
+    source.forShelf(OTHER_SHELF).resolve(titlesOf(OTHER_SHELF));
+
     await idle;
     expect(resolver.isIdle()).toBe(true);
   });
