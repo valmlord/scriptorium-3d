@@ -154,6 +154,17 @@ export function createSpineTitleAtlas(
         return;
       }
 
+      // Note on the order below: the row is claimed before it is painted,
+      // where the refusals above are taken before anything is allocated. A
+      // canvas call throwing between the two would leave `shelvesHeld`
+      // claiming a row that was never drawn, and `@app`'s resolver asks the
+      // atlas what it holds before asking for a shelf, so that shelf would
+      // stay blank for as long as the room is loaded. The claim has to come
+      // first, because the row number is what the drawing needs; closing it
+      // properly means releasing the row if the draw throws, and the draw is
+      // `fillRect`, `fillText` and `font` on a real 2D context, none of which
+      // throws. Recorded rather than guarded, so the next person to add a
+      // drawing call that can fail knows what it would cost.
       const atlas = device ?? materialize();
       device = atlas;
 

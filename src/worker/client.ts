@@ -615,6 +615,14 @@ function takeTitle(response: ResultResponse): Taken<string> {
   if (response.kind !== 'title') {
     return wrongKind('title', response.kind);
   }
+  // Deliberately not measured against `TITLE_LENGTH`, unlike the page above,
+  // and the asymmetry is recorded rather than tidied. A page of the wrong
+  // length lays out as a grid with an invisible gap, which is why that one is
+  // refused; an over-long title reaches a text node (inert) and a `fillText`
+  // clipped by `maxWidth` (`@engine/titles`), so the worst it does is look
+  // wrong on one spine. Adding the check would be right and would also change
+  // what a skewed worker does to a whole shelf, which is a decision for the
+  // milestone that makes a title failure reachable rather than for this one.
   return { ok: true, value: response.title };
 }
 

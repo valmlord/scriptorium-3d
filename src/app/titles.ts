@@ -262,6 +262,17 @@ export function createTitleResolver(options: TitleResolverOptions): TitleResolve
       },
       () => {
         // One path for both cases, because they want the same two calls.
+        //
+        // What this does *not* do is abandon the shelf's other requests. A
+        // shelf is 32 of them aggregated by `Promise.all`, which rejects on
+        // the first failure, so up to 31 are still being computed when this
+        // runs and nothing cancels them; returning to the shelf then asks for
+        // what is still out. It costs nothing today because a generation
+        // failure is not reachable from the M6 interface (ADR-0032) and
+        // `waitForIdle()` composes the client's own request table, so it waits
+        // for them anyway. The milestone that makes a failure reachable is the
+        // one that should call `cancel()` here.
+        //
         // Nothing is recorded for a shelf that did not arrive, so coming back
         // to it asks again; and the record is cleared only if this reply is
         // still the one holding it, because a cancellation rejects into the
