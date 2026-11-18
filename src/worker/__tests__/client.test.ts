@@ -833,6 +833,44 @@ describe('branches that only a worker disagreeing with the client can reach', ()
     });
   });
 
+  it('refuses a page that is not 3200 characters, and caches nothing', async () => {
+    // The cache is written in a `then` on the result, so a reply admitted here
+    // would be served for that address for the rest of the session, and the
+    // reader would refuse it every time with no way back.
+    const cache = new GenerationCache();
+    const worker = new ScriptedWorker();
+    const client = new GenerationClient(worker, cache);
+    const request = client.page(FIRST_ADDRESS);
+
+    worker.reply({
+      kind: 'page',
+      id: onlyId(request),
+      text: getPage(FIRST_ADDRESS).slice(1),
+    });
+
+    const error = await rejection(request.result);
+    expect(error).toBeInstanceOf(MalformedResponseError);
+    expect(error).toMatchObject({
+      detail: expect.stringContaining('a page of 3199 characters, and a page is 3200'),
+    });
+    expect(cache.getPage(FIRST_ADDRESS)).toBeUndefined();
+    expect(cache.pageCount).toBe(0);
+  });
+
+  it('refuses a page with a character too many', async () => {
+    const worker = new ScriptedWorker();
+    const client = new GenerationClient(worker);
+    const request = client.page(FIRST_ADDRESS);
+
+    worker.reply({
+      kind: 'page',
+      id: onlyId(request),
+      text: `${getPage(FIRST_ADDRESS)} `,
+    });
+
+    expect(await rejection(request.result)).toBeInstanceOf(MalformedResponseError);
+  });
+
   it('refuses a title where an address was asked for', async () => {
     const worker = new ScriptedWorker();
     const client = new GenerationClient(worker);

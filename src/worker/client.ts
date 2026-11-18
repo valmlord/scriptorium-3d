@@ -324,7 +324,7 @@ export class GenerationClient {
    * Generate one throwaway page at a fixed address and discard it.
    *
    * Called once on startup. It pays the cold-start cost — eight times a warm
-   * page, up to 12.1 ms (ADR-0005) — on a page nobody is waiting for, so that
+   * page, up to 12.4 ms (ADR-0005) — on a page nobody is waiting for, so that
    * the first page a reader asks for is a warm one.
    *
    * The result is discarded rather than cached: caching it would retain 6.4 KB

@@ -330,6 +330,55 @@ test('a turn superseded by a cached page writes nothing to the view', async ({
   expect(await readerContent(page)).toBe(getPage({ ...address, page: 1 }));
 });
 
+test('a cancelled turn to a page the machine returns to is not reported as a failure', async ({
+  page,
+}) => {
+  // The ordering neither scenario above reaches, and the one the first judge
+  // round found by reading: `next, next, previous` leaves page 1 open again
+  // while page 1's own cancelled request is still queued as a microtask. A
+  // refusal guarded on the address alone then reports a page that is
+  // generating fine as one that could not be generated, and drops `aria-busy`
+  // over the page before it (ADR-0032). Reverting that guard leaves every
+  // other scenario in this suite green, which is why this one exists.
+  const address = await openFirstVolume(page);
+  await watchText(page, READER_STATUS, 'status');
+  await watchText(page, READER_PAGE, 'pages');
+
+  await page.evaluate(
+    (selectors: { next: string; previous: string }) => {
+      const next = document.querySelector(selectors.next);
+      const previous = document.querySelector(selectors.previous);
+      if (!(next instanceof HTMLButtonElement)) {
+        throw new Error('the reader has no next-page control');
+      }
+      if (!(previous instanceof HTMLButtonElement)) {
+        throw new Error('the reader has no previous-page control');
+      }
+      next.click();
+      next.click();
+      previous.click();
+    },
+    { next: NEXT_PAGE, previous: PREVIOUS_PAGE }
+  );
+
+  await waitForIdle(page);
+
+  const reached = await openAddress(page);
+  expect(reached.page).toBe(1);
+  expect(await readerContent(page)).toBe(getPage({ ...address, page: 1 }));
+  await expect(page.locator(READER_STATUS)).toHaveText('Page 2 of 410');
+  await expect(page.locator(READER_PAGE)).toHaveAttribute('aria-busy', 'false');
+
+  // Not at any point, not only at the end: the status line never reported a
+  // failure, and the view never held a page the machine was not on.
+  for (const reported of (await recorded(page, 'status')).texts) {
+    expect(reported).not.toContain('could not be generated');
+  }
+  const shown = await recorded(page, 'pages');
+  expect(shown.texts).not.toContain(getPage({ ...address, page: 2 }));
+  expect(shown.texts.at(-1)).toBe(getPage({ ...address, page: 1 }));
+});
+
 test('closing the reader leaves the book, and the text with it', async ({ page }) => {
   await openFirstVolume(page);
 

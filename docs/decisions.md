@@ -2351,6 +2351,16 @@ the worker is still generating, and a turn superseded by a cache hit in its own 
   table, the reader, and the title resolver (`docs/testing.md` §7). The composition is
   `src/app/idle.ts`, and the property that needed a test is that one pass over the sources is not
   an answer — a page arriving leaves the client quiet and the reader writing.
+- **What the atlas costs to send, which is the figure the redraw rule rests on.** Measured in the
+  built application on an Apple M4, Chromium through Playwright 1.62.1, Node v22.23.1: drawing a
+  shelf's 32 cells is 0.0 ms median and 0.2 ms at worst, while uploading the 1024 by 2048 canvas is
+  3.4 ms, because three.js has no partial upload for a `CanvasTexture`. An animation callback
+  carrying one goes from 0.1 ms to between 3.0 and 4.4 ms. So `engine/titles.ts` leaves a shelf it
+  already holds alone, and `app/titles.ts` asks the atlas what it holds before fanning a shelf out
+  over 32 cache reads, each of which renders a key from the room's linear index: 2.31 ms of `bigint`
+  work per navigation event at a room of 4975 digits, which is the room a deep link reaches (M8).
+  After both, a page turn costs no upload and a 0.1 ms median callback, and the first shelf of a room
+  costs one callback of 9.2 to 9.6 ms while the camera is still flying.
 - The same rule serves the spine titles: a shelf of titles that arrives for a shelf the machine has
   left changes nothing. Neither the reader nor the title resolver inspects an error class to tell a
   cancellation from a failure, because the question "is this still what the machine is asking for"
@@ -2366,10 +2376,15 @@ the worker is still generating, and a turn superseded by a cache hit in its own 
   never coming.
 - **The reader has no unit tests, and cannot have them as the project stands.** `vitest` runs in the
   `node` environment and no DOM environment is installed, so `src/ui/reader.ts` is reachable only
-  from Playwright: the whole of the rule above rests on the two end-to-end scenarios that cover the
-  two arrival orders, and the third ordering — a cancelled request whose page is open again — was
-  found by reading rather than by a test, then pinned by one. That is the cost of this layer having
-  no test environment, and it is recorded here rather than left to be discovered a third time.
+  from Playwright: the whole of the rule above rests on the end-to-end scenarios and on nothing else. Three
+  orderings are covered, and the third one is there because the first judge round of M6 found it by
+  reading: a cancelled request whose page the machine returns to inside the same task, which
+  `e2e/reader.spec.ts`'s "a cancelled turn to a page the machine returns to is not reported as a
+  failure" performs as `next, next, previous`. The second round of the same review found that
+  sentence claiming a test that did not yet exist, which is worse than admitting a gap, so the test
+  is named here and the two others beside it are "a page turn interrupted mid-flight" and "a turn
+  superseded by a cached page". That is the cost of this layer having no test environment, and it is
+  recorded rather than left to be discovered a fourth time.
 - **M6 is the change that put `core`'s generation surface into the main-thread bundle, and ADR-0029
   predicted exactly that.** Its open paragraph said the shipped bundle contained no `getPage`
   "because neither `app/url.ts` nor the worker client is in the entry graph yet", and named a person

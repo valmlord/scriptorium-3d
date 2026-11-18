@@ -117,17 +117,35 @@ class ScriptedShelves implements ShelfTitleSource {
   }
 }
 
-/** A room that records what was written onto its spines. */
+/**
+ * A room that records what was written onto its spines, and holds a shelf once
+ * it has been written, as the real atlas does.
+ */
 class RecordingRoom implements RoomTitles {
   readonly written: { firstSlot: number; titles: readonly string[] }[] = [];
+
+  /** Shelf indices this stand-in is holding, in the atlas's own vocabulary. */
+  private readonly held: number[] = [];
 
   constructor(readonly room: bigint) {}
 
   readonly titles = {
     setShelfTitles: (firstSlot: number, titles: readonly string[]): void => {
       this.written.push({ firstSlot, titles });
+      this.held.push(firstSlot / BOOKS_PER_SHELF);
     },
+    // The same array the class pushes into, so what it holds is visible
+    // through the interface the resolver reads.
+    shelvesHeld: this.held,
   };
+
+  /** Forget a shelf, as the atlas does when it displaces a row. */
+  evict(firstSlot: number): void {
+    const index = this.held.indexOf(firstSlot / BOOKS_PER_SHELF);
+    if (index >= 0) {
+      this.held.splice(index, 1);
+    }
+  }
 }
 
 function keyOf(shelf: ShelfAddress): string {
@@ -199,23 +217,33 @@ describe('which shelf is asked for', () => {
     expect(source.issued).toHaveLength(1);
   });
 
-  it('asks again once that shelf has arrived, which is what redraws an evicted one', async () => {
-    // This replaces a test that claimed the opposite and could not fail for
-    // it: its scripted shelf was left pending forever, so the in-flight guard
-    // above was the only thing it ever exercised. In the application the shelf
-    // arrives in 17 to 45 ms (ADR-0005) while the camera is still flying, so
-    // by the time a reader can turn a page nothing is in flight.
-    //
-    // Asking again is correct, not waste: the atlas holds seven shelves of a
-    // room's twenty, so a shelf may have been displaced since, and the re-ask
-    // is what brings it back. What must not happen is the atlas redrawing a
-    // shelf it still holds, and that is asserted where the atlas lives
-    // (`src/engine/__tests__/titles.test.ts`).
+  it('does not ask again for a shelf the atlas is still holding', async () => {
+    // The atlas is the authority on what is drawn, so it is asked rather than
+    // remembered. Each ask is 32 calls through the client's cache and each one
+    // renders a key from the room's linear index: at a room of 4975 digits,
+    // which is what a deep link reaches, that measured 2.31 ms of `bigint`
+    // work per navigation event on an Apple M4.
     const { navigation, source } = harness();
     goTo(navigation, SHELF, 3);
     source.forShelf(SHELF).resolve(titlesOf(SHELF));
     await Promise.resolve();
 
+    navigation.dispatch({ type: 'turn-page', page: 9 });
+
+    expect(source.issued).toHaveLength(1);
+  });
+
+  it('asks again for a shelf the atlas has displaced', async () => {
+    // Which is why nothing here remembers having asked: the atlas holds seven
+    // shelves of a room's twenty and displaces them in turn, so a shelf can
+    // stop being drawn without this module being told. Asking the atlas is
+    // what makes the re-draw happen by itself.
+    const { navigation, source, room } = harness();
+    goTo(navigation, SHELF, 3);
+    source.forShelf(SHELF).resolve(titlesOf(SHELF));
+    await Promise.resolve();
+
+    room.evict(firstSlotOf(SHELF));
     navigation.dispatch({ type: 'turn-page', page: 9 });
 
     expect(source.issued).toHaveLength(2);
@@ -370,6 +398,39 @@ describe('the resolver as a source of pending work', () => {
     const idle = resolver.whenIdle();
 
     navigation.dispatch({ type: 'back' });
+
+    await idle;
+    expect(resolver.isIdle()).toBe(true);
+  });
+
+  it('settles even when the atlas refuses the shelf it was given', async () => {
+    // `setShelfTitles` refuses a malformed shelf (`@engine/atlas`), and the
+    // request is over whatever it does with it. Without the `finally` the
+    // waiters are never released and `waitForIdle()` hangs on work that has
+    // already finished; reducing it back to a plain call leaves every other
+    // test in this file green.
+    const navigation = createNavigation(ROOM);
+    const source = new ScriptedShelves();
+    const refusing: RoomTitles = {
+      room: ROOM,
+      titles: {
+        setShelfTitles: () => {
+          throw new Error('a shelf of titles the atlas would not take');
+        },
+        shelvesHeld: [],
+      },
+    };
+    const resolver = createTitleResolver({
+      navigation,
+      source,
+      destination: { room: refusing },
+    });
+    goTo(navigation, SHELF);
+    const idle = resolver.whenIdle();
+
+    expect(() => {
+      source.forShelf(SHELF).resolve(titlesOf(SHELF));
+    }).not.toThrow();
 
     await idle;
     expect(resolver.isIdle()).toBe(true);
