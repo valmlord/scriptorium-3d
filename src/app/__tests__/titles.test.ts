@@ -187,24 +187,39 @@ describe('which shelf is asked for', () => {
     expect(source.issued.map((request) => request.shelf)).toEqual([SHELF]);
   });
 
-  it('does not ask again for the shelf it is already resolving', () => {
+  it('does not ask again while that shelf is still being generated', () => {
     const { navigation, source } = harness();
     goTo(navigation, SHELF);
 
     // Down to a volume of the same shelf, which is a new state and the same
     // shelf of spines.
     goTo(navigation, SHELF, 3);
+    navigation.dispatch({ type: 'turn-page', page: 9 });
 
     expect(source.issued).toHaveLength(1);
   });
 
-  it('does not ask again when only the page turns', () => {
+  it('asks again once that shelf has arrived, which is what redraws an evicted one', async () => {
+    // This replaces a test that claimed the opposite and could not fail for
+    // it: its scripted shelf was left pending forever, so the in-flight guard
+    // above was the only thing it ever exercised. In the application the shelf
+    // arrives in 17 to 45 ms (ADR-0005) while the camera is still flying, so
+    // by the time a reader can turn a page nothing is in flight.
+    //
+    // Asking again is correct, not waste: the atlas holds seven shelves of a
+    // room's twenty, so a shelf may have been displaced since, and the re-ask
+    // is what brings it back. What must not happen is the atlas redrawing a
+    // shelf it still holds, and that is asserted where the atlas lives
+    // (`src/engine/__tests__/titles.test.ts`).
     const { navigation, source } = harness();
     goTo(navigation, SHELF, 3);
+    source.forShelf(SHELF).resolve(titlesOf(SHELF));
+    await Promise.resolve();
 
     navigation.dispatch({ type: 'turn-page', page: 9 });
 
-    expect(source.issued).toHaveLength(1);
+    expect(source.issued).toHaveLength(2);
+    expect(source.issued[1]?.shelf).toEqual(SHELF);
   });
 });
 
