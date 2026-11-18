@@ -29,12 +29,12 @@ import { SPINES_PER_ROOM } from './slots';
  * regeneration — the worker's cache holds a whole room of titles
  * (`@worker/cache`).
  *
- * **It is not sized to save the redraw, which is free.** Measured on an Apple
- * M4 in Chromium: drawing a shelf's 32 cells is 0.0 ms median and 0.2 ms at
- * worst, while uploading the atlas is 3.4 ms, because three.js has no partial
- * upload for a `CanvasTexture`. So rows are cheap to fill and the *atlas* is
- * what is expensive to send, and the figure that matters is how often it is
- * sent rather than how often a cell is painted: `titles.ts` sends it once per
+ * **It is not sized to save the redraw, which is free.** ADR-0032 holds the
+ * measurement: drawing a shelf's 32 cells costs a fraction of the upload that
+ * follows it, because three.js has no partial upload for a `CanvasTexture` and
+ * sends the whole atlas. So rows are cheap to fill and the *atlas* is what is
+ * expensive to send, and the figure that matters is how often it is sent
+ * rather than how often a cell is painted: `titles.ts` sends it once per
  * shelf acquired and never for a shelf it already holds. Eight rows of 256
  * pixels is 8.4 MB on the device and about as much again for the canvas that
  * backs it; a room's worth would be 21 rows and 22.0 MB, for titles nineteen

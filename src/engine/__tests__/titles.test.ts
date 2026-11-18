@@ -161,8 +161,9 @@ describe('a shelf the atlas already holds', () => {
   it('is not redrawn, and does not upload the atlas again', () => {
     // The defect this test exists for: the resolver re-asks for the shelf on
     // every navigation event inside it, and an unconditional redraw turned
-    // each of those into a whole-atlas upload, measured at 3.2 to 4.4 ms of
-    // one animation callback on an Apple M4 (ADR-0032).
+    // each of those into a whole-atlas upload, which is milliseconds of one
+    // animation callback where a turn otherwise costs tenths. ADR-0032 holds
+    // the measurement and is the only place that states it.
     const { atlas, drawn, spines } = atlasOverRecordingCanvas();
     atlas.setShelfTitles(firstSlotOfShelf(2), titlesOf(2));
     const texture = textureOf(spines);

@@ -142,9 +142,9 @@ export function createSpineTitleAtlas(
         // function of its address (SPEC §4), so redrawing it would change
         // nothing and cost a whole-atlas upload: three.js has no partial path
         // for a `CanvasTexture`, so `needsUpdate` sends all 1024 by 2048
-        // pixels. Measured on an Apple M4, Chromium: drawing a shelf's 32
-        // cells is 0.0 ms median and uploading the atlas 3.4 ms, and the
-        // animation callback carrying one goes from 0.1 ms to 3.2-4.4 ms.
+        // pixels. That is milliseconds of one animation callback where a turn
+        // otherwise costs tenths; ADR-0032 holds the measurement, and the
+        // redraw itself is the cheap half of it.
         //
         // This is what makes `./atlas.ts`'s "a row is never redrawn while it
         // is held" true rather than aspirational, and it is why a caller may

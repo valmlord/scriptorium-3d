@@ -468,8 +468,8 @@ test('a shelf of titles is uploaded once, not once per page turn', async ({ page
   // A title is a pure function of its address, so the shelf the reader is
   // standing in is drawn once. three.js has no partial upload for a
   // `CanvasTexture`, so a redraw per turn would send all 1024 by 2048 pixels
-  // again: measured at 3.2 to 4.4 ms of one animation callback on an Apple M4,
-  // against a 0.1 ms median (ADR-0032).
+  // again, which costs milliseconds of one animation callback where a turn
+  // otherwise costs tenths. ADR-0032 holds the measurement.
   const after = await readWebGLProbe(page, PROBE_FRAMES);
   expect(atlasUploadsOf(after)).toBe(uploadsAfterOpening);
 });
