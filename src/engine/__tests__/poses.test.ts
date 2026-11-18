@@ -109,12 +109,20 @@ type Framing = { radial: number; height: number; pitch: number; fov: number };
  * not equally forgiving. Looking down, the sum puts **both** edges higher
  * than they are: at the room vantage it reported a bottom of 0.0664 m where
  * the frame reaches -0.0114 m, and a top of 2.5608 m where it reaches
- * 2.5105 m. Every assertion on the bottom edge in this file is "lower than",
- * so a bottom reported too high is the conservative error. The flattering one
- * was at the top: `reach.top > ROOM_HEIGHT` was passing on 2.56 m against a
+ * 2.5105 m. Most assertions on the bottom edge here are "lower than", and a
+ * bottom reported too high only makes those stricter. The one that matters
+ * is at the top: `reach.top > ROOM_HEIGHT` was passing on 2.56 m against a
  * frame that reaches 2.51 m, an inflated margin of 0.16 m where the truth is
  * 0.11 m. Naming the drop as the dangerous side, as the first write-up of
  * this did, points an auditor at the edge that was never in doubt.
+ *
+ * "Most", not "every", and the exception is in this file: the cropping guard
+ * below asserts the bottom edge stays *above* `SHELF_BASE_HEIGHT`, where an
+ * inflated bottom flatters as well. It reported 0.6246 m there against a
+ * true 0.5766 m, both far clear of the 0.3 m it is checked against, so no
+ * verdict moved. A rule of thumb about which way an error cuts is worth
+ * only as much as the sweep that backs it, and the first version of this
+ * paragraph claimed "every" without doing the sweep.
  *
  * Nor is the direction a property of the formula. It holds for a downward
  * pitch, which is every pose here; pitched up, the sum overstates the drop
@@ -154,6 +162,12 @@ function verticalReachAtWall(pose: Framing): { bottom: number; top: number } {
  * claimed 2.08:1 of headroom where the real figure is nearer 1.9 (issue #52
  * review). So this asks the camera `applyRig` builds, and takes depth from
  * the view transform rather than from the plan.
+ *
+ * Not `point.project(camera)` and `|ndc.x| <= 1`, which would look like the
+ * more direct question. A point behind the camera projects through a
+ * negative `w`, which flips the sign and makes its NDC x meaningless, and
+ * two of the doorway corners asked about here are behind the camera. A
+ * clearance reports those as outside for the right reason.
  */
 function sidePlaneClearance(pose: CameraPose, aspect: number, point: Vector3): number {
   const camera = new PerspectiveCamera(pose.fov, aspect, CAMERA_NEAR, CAMERA_FAR);
@@ -255,9 +269,12 @@ function frameEdgesFromCamera(
 
 /**
  * A point on the floor at the foot of hexagon side `side`, `lateral` along
- * the wall from its middle. The same frame `placeOnSide` in `./layout.ts`
- * puts every object in a room at, restated here rather than imported, for the
- * reason `sideCorners` below is.
+ * the wall from its middle.
+ *
+ * The same frame `placeOnSide` in `./layout.ts` puts every object in a room
+ * at, restated here rather than imported: a test that reaches for the
+ * module's own arithmetic to say where the room is compares that module
+ * against itself, and a wrong answer in it would be invisible from here.
  */
 function wallPoint(side: number, lateral: number): Vector3 {
   const bearing = sideBearing(side);
@@ -308,7 +325,7 @@ describe('the framing helper the other tests are measured with', () => {
   /**
    * The arithmetic is only ever as good as the instrument. Pointing a camera
    * down tilts the frustum, and the edges of a tilted frustum do not sit at
-   * `tan(pitch) +/- tan(fov/2)`: they sit at `tan(pitch -/+ fov/2)`, which is
+   * `tan(pitch) +/- tan(fov/2)`: they sit at `tan(pitch +/- fov/2)`, which is
    * a different number for every pitch but zero (issue #52). At zero pitch
    * the two agree exactly, which is why this went unnoticed through M5 and
    * #51 and why the case below is pinned at the room level's own pitch
