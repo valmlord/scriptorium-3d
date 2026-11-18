@@ -1,3 +1,4 @@
+import { shelfIndexOfFirstSlot } from '@engine/atlas';
 import { bookAddressToSlot } from '@engine/slots';
 import { bookAddressOf } from '@state/navigation';
 import type { Navigation, NavigationState } from '@state/navigation';
@@ -45,6 +46,16 @@ export interface RoomTitles {
   /** The room's spine title atlas (`@engine/titles`). */
   readonly titles: {
     setShelfTitles(firstSlot: number, titles: readonly string[]): void;
+    /**
+     * The shelves whose titles the atlas is holding, by shelf index.
+     *
+     * Asked before a shelf is requested, so the atlas stays the single
+     * authority on what is drawn. It holds seven of a room's twenty and
+     * displaces them in turn, so "already asked" is not the same question and
+     * a record of it here would be a second copy of the answer
+     * (`architecture.md` §4) that leaves blank spines after an eviction.
+     */
+    readonly shelvesHeld: readonly number[];
   };
 }
 
@@ -125,8 +136,30 @@ export function createTitleResolver(options: TitleResolverOptions): TitleResolve
     if (requested !== null && sameShelf(wanted, requested)) {
       return;
     }
+    if (isAlreadyDrawn(wanted)) {
+      // Nothing to generate and nothing to draw. Skipped here rather than
+      // inside the atlas because the fan-out happens first: a shelf is 32
+      // calls through the client's cache, and each one renders a cache key
+      // from the room's linear index. At room 0 that is tenths of a
+      // microsecond; at a room of 4975 digits, which is what a deep link
+      // reaches (M8), it measured 2.31 ms of `bigint` work per navigation
+      // event on an Apple M4. The atlas refusing to redraw saves the upload;
+      // this saves the asking.
+      return;
+    }
     abandon();
     ask(wanted);
+  }
+
+  /** Whether the room on screen already has that shelf's titles drawn. */
+  function isAlreadyDrawn(shelf: ShelfAddress): boolean {
+    const loaded = destination.room;
+    if (loaded === null || loaded.room !== shelf.room) {
+      return false;
+    }
+    return loaded.titles.shelvesHeld.includes(
+      shelfIndexOfFirstSlot(bookAddressToSlot({ ...shelf, volume: 0 }))
+    );
   }
 
   /** Issue the request for `shelf` and write its titles when they arrive. */
@@ -147,7 +180,11 @@ export function createTitleResolver(options: TitleResolverOptions): TitleResolve
           // arrives malformed is refused inside `setShelfTitles`
           // (`@engine/atlas`). Releasing in a `finally` is what keeps that
           // refusal from leaving `waitForIdle()` waiting on a request that is
-          // already over.
+          // already over. The refusal itself is deliberately not caught: the
+          // client fans a shelf out over exactly `BOOKS_PER_SHELF` requests,
+          // so a shelf the atlas will not take is a bug on this side of the
+          // boundary and should be loud. What must not happen is idleness
+          // being wrong as well.
           release();
         }
       },

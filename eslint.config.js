@@ -22,10 +22,13 @@ import eslintConfigPrettier from 'eslint-config-prettier';
  * boundary with both rules behind it, because it is the one whose breach costs
  * a frame.
  *
- * `src/__tests__/` deliberately has none. The three files there are the suite's
- * own meta-tests — they read this config, the aliases and the budgets — and
- * holding them to a layer's rule would be holding them to a layer they are not
- * in.
+ * `src/__tests__/` deliberately has none. The four files there are the suite's
+ * own meta-tests — they read this config, the aliases, the budgets and the
+ * built bundles — and holding them to a layer's rule would be holding them to a
+ * layer they are not in. The bundle test imports `@core/prf` for `DOMAIN_TAG`,
+ * which is the generation surface, and that is the exemption doing its job
+ * rather than a hole in it: it asserts where that surface ends up, so it has to
+ * be able to name it (ADR-0032).
  *
  * The groups are matched against the import string, gitignore-style, so they
  * are phrased on the `@layer/*` aliases that every import in this repository
