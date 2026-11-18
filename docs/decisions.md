@@ -2365,14 +2365,28 @@ the worker is still generating, and a turn superseded by a cache hit in its own 
   So `engine/titles.ts` leaves a shelf it already holds alone, and `app/titles.ts` asks the atlas
   what it holds before fanning a shelf out over 32 cache reads, each of which renders a key from the
   room's linear index. That fan-out is 2.3 ms of `bigint` work per navigation event at the
-  deepest room: 2.26 to 2.68 over 31 runs under `vite-node`, median 2.28, against tens of
-  nanoseconds for asking the atlas which shelves it holds. Re-taken because two copies of it had
+  deepest room: 2.26 to 2.68 over 31 runs under `vite-node`, median 2.28, against 1.4 to 1.9
+  microseconds for asking the atlas which shelves it holds - not the tens of nanoseconds an earlier
+  draft of this bullet claimed, which was the cost of the `includes` alone rather than of
+  `isAlreadyDrawn` as written, since reaching the shelf index converts the room as well. Re-taken because two copies of it had
   drifted to 2.31 and 2.47, and taken again after a first attempt reported a median of 3.1 from nine
   runs that had not warmed up - which is how a figure of this shape goes wrong, and the reason the
   run count is given beside it. The room is the one a deep link reaches (M8): its index is 4975
   decimal digits, and its name, which is what a URL and a console line carry, is 3197 base-36
   characters. After both rules, a page turn costs no upload and a 0.1 ms median callback, and the
   first shelf of a room costs one callback of 9.2 to 9.6 ms while the camera is still flying.
+- **That fan-out is about twenty times larger than it needs to be, and nothing else in this
+  repository said so.** A cache key is the address's linear index in base `RADIX` (`@worker/cache`),
+  and the room term dominates a 16545-bit index while being identical for all 32 volumes of a
+  shelf - so the 2.3 ms is one 3197-digit base-36 conversion performed 32 times. Rendering the room
+  once and appending each volume's remainder measured 0.11 ms against 2.29 ms over 31 runs, same
+  apparatus as above. That is a constant hoisted out of a loop; it lives in `pageKey`/`titleKey`
+  rather than in anything M6 wrote, and M6 is only what made it fire 32 times per navigation event
+  instead of once. Left alone here because the figure is paid once per shelf while the camera is
+  flying, and the rule above already skips it on a repeat ask, so collecting the 2.2 ms means
+  changing the worker's cache keys for a cost that is already inside budget - and `MAX_KEY_LENGTH`
+  would have to grow by a separator, since the budget counts keys. Recorded because an avoidable
+  2.2 ms with nowhere to live is how a figure stops being known.
 - The same rule serves the spine titles: a shelf of titles that arrives for a shelf the machine has
   left changes nothing. Neither the reader nor the title resolver inspects an error class to tell a
   cancellation from a failure, because the question "is this still what the machine is asking for"

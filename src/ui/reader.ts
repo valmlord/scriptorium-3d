@@ -391,6 +391,18 @@ export function createReader(options: ReaderOptions): Reader {
    * record of the *other* request being cleared, because that would report the
    * reader idle with a request outstanding and `waitForIdle()` would resolve
    * in the middle of a turn.
+   *
+   * **No test covers this guard**, and that is stated here rather than left to
+   * be discovered: replacing this body with an unconditional clear leaves all
+   * twelve reader scenarios green. The ordering that reaches it is `next,
+   * previous, next` in one task with page 1 already cached, which puts two
+   * requests for page 1 in flight at once - the three orderings the suite does
+   * cover never issue two for the same page. Nothing on screen would be wrong
+   * in that ordering, which is why it is a gap rather than a defect: the cost
+   * is `waitForIdle()` returning early and the same 80 lines being written
+   * twice afterwards. A scenario pinning it would have to assert that both
+   * duplicate writes landed, which is a strange property to fix in place, so
+   * it is recorded as a follow-up on #44 instead of guessed at here.
    */
   function forgetPageRequest(from: GenerationRequest<string>): void {
     if (pageRequest === from) {
