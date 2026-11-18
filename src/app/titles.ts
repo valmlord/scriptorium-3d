@@ -153,18 +153,30 @@ export function createTitleResolver(options: TitleResolverOptions): TitleResolve
     if (requested !== null && sameShelf(wanted, requested)) {
       return;
     }
+    // Abandoned before anything else is decided, because that is the half of
+    // this function's job that is owed to the shelf being left rather than to
+    // the one being arrived at. An early return placed above this line skips
+    // it: the 32 titles of the departed shelf go on being computed, and its
+    // reply then finds itself unwanted and clears nothing, so the resolver
+    // reports busy for ever and `waitForIdle()` cannot return.
+    abandon();
     if (isAlreadyDrawn(wanted)) {
-      // Nothing to generate and nothing to draw. Skipped here rather than
-      // inside the atlas because the fan-out happens first: a shelf is 32
-      // calls through the client's cache, and each one renders a cache key
-      // from the room's linear index. At room 0 that is tenths of a
-      // microsecond; at a room of 4975 digits, which is what a deep link
-      // reaches (M8), it measured 2.31 ms of `bigint` work per navigation
-      // event on an Apple M4. The atlas refusing to redraw saves the upload;
+      // Nothing to generate and nothing to draw. Asked here rather than left
+      // to the atlas because the fan-out happens first: a shelf is 32 calls
+      // through the client's cache, and each one renders a cache key from the
+      // room's linear index. At room 0 that is tenths of a microsecond; at a
+      // room of 4975 digits, which is what a deep link reaches (M8), the 32
+      // keys measured 2.47 ms of `bigint` work against 0.003 ms for this
+      // check, on an Apple M4. The atlas refusing to redraw saves the upload;
       // this saves the asking.
+      //
+      // Released because this path ends idle. `abandon()` cancels and forgets
+      // but does not release, and `whenAllIdle` waits on the promise it has
+      // already taken rather than re-reading `isIdle()` (`./idle.ts`), so a
+      // source that goes idle without releasing strands whoever is waiting.
+      release();
       return;
     }
-    abandon();
     ask(wanted);
   }
 
@@ -187,6 +199,12 @@ export function createTitleResolver(options: TitleResolverOptions): TitleResolve
     issued.result.then(
       (titles) => {
         if (!isWanted(shelf)) {
+          // The departure cancelled and forgot this request, so there is
+          // normally nothing left to clear. Clearing it anyway if it is
+          // somehow still the one recorded keeps this handler from resting on
+          // that invariant, which is what the fast path above broke once.
+          forgetIfCurrent(issued);
+          release();
           return;
         }
         forget();
@@ -202,12 +220,17 @@ export function createTitleResolver(options: TitleResolverOptions): TitleResolve
         } finally {
           // The request has settled whatever the write did, so the waiters are
           // released either way: a refused shelf must not leave
-          // `waitForIdle()` waiting on a request that is already over.
+          // `waitForIdle()` waiting on a request that is already over. What
+          // matters is that the call is on the refusal path, not the keyword
+          // around it: a trailing `release()` would behave the same, and a
+          // mutation of the keyword alone is equivalent.
           release();
         }
       },
       () => {
         if (!isWanted(shelf)) {
+          forgetIfCurrent(issued);
+          release();
           return;
         }
         // Nothing is recorded for a shelf that did not arrive, so coming back
@@ -253,6 +276,20 @@ export function createTitleResolver(options: TitleResolverOptions): TitleResolve
   function forget(): void {
     request = null;
     requested = null;
+  }
+
+  /**
+   * Forget the request in flight, if `issued` is the one in flight.
+   *
+   * The reader's `forgetPageRequest(from)` has the same shape and the same
+   * reason: a reply from a superseded request must not clear the record of the
+   * one that superseded it, or the resolver would report idle with a shelf
+   * still being generated.
+   */
+  function forgetIfCurrent(issued: GenerationRequest<readonly string[]>): void {
+    if (request === issued) {
+      forget();
+    }
   }
 
   /**

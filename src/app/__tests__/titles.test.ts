@@ -249,6 +249,48 @@ describe('which shelf is asked for', () => {
     expect(source.issued).toHaveLength(1);
   });
 
+  it('abandons the shelf in flight when it lands on one the atlas holds', async () => {
+    // One pointer click reaches this: a gesture is a single `dispatchAll`, so
+    // the resolver sees one notification, and landing on a shelf the atlas
+    // already holds while another shelf's 32 titles are in flight used to skip
+    // the cancellation entirely. The worker went on computing them, the stale
+    // reply then cleared nothing, and the resolver reported busy for ever, so
+    // `waitForIdle()` could never return. Every other cancellation test here
+    // leaves an in-flight shelf for a shelf the atlas does *not* hold, which
+    // is why 974 tests and 20 scenarios stayed green.
+    const { navigation, source, resolver } = harness();
+    goTo(navigation, SHELF, 3);
+    source.forShelf(SHELF).resolve(titlesOf(SHELF));
+    await Promise.resolve();
+    goTo(navigation, OTHER_SHELF);
+    const inFlight = source.forShelf(OTHER_SHELF);
+    const idle = resolver.whenIdle();
+
+    goTo(navigation, SHELF, 3);
+
+    expect(inFlight.cancelled).toBe(true);
+    await idle;
+    expect(resolver.isIdle()).toBe(true);
+  });
+
+  it('can ask again for the shelf it abandoned on the way to a drawn one', async () => {
+    // The other half: the record of the abandoned request has to be cleared,
+    // or returning to that shelf hits the in-flight guard and it is never
+    // asked again, so its spines stay blank for the rest of the session.
+    const { navigation, source } = harness();
+    goTo(navigation, SHELF, 3);
+    source.forShelf(SHELF).resolve(titlesOf(SHELF));
+    await Promise.resolve();
+    goTo(navigation, OTHER_SHELF);
+    goTo(navigation, SHELF, 3);
+
+    goTo(navigation, OTHER_SHELF);
+
+    expect(
+      source.issued.filter((issued) => keyOf(issued.shelf) === keyOf(OTHER_SHELF))
+    ).toHaveLength(2);
+  });
+
   it('asks again for a shelf the atlas has displaced', async () => {
     // Which is why nothing here remembers having asked: the atlas holds seven
     // shelves of a room's twenty and displaces them in turn, so a shelf can
