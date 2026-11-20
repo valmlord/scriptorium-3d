@@ -208,16 +208,22 @@ function groundPosition(pose: {
 }
 
 /**
- * How far off the view axis a point on the floor lies, in radians, however far
- * away it is, and **signed**: negative to one side of the axis and positive to
- * the other. A point behind the camera comes back past a right angle, which is
- * what makes this a usable test of "out of frame" rather than only of "far to
- * one side".
+ * How far off the view axis a plan point lies, in radians, and **signed**:
+ * negative to one side of the axis and positive to the other.
  *
  * Signed rather than absolute so that a claim about the two halves of the
  * frame can be asserted as written. With magnitudes alone, "a wall under each
  * half" is indistinguishable from both walls piled into the same half, and a
  * test that cannot tell those apart is not testing its own sentence.
+ *
+ * **Handedness is the whole of what this is for.** It is not a test of
+ * whether something is in frame, and an earlier version of this comment said
+ * it was, left behind when the doorway guard stopped using it. A plan angle
+ * drops the pitch, so as an in-frame test it puts the doorway leaving the
+ * frame at 2.08:1 where the camera's own side plane gives 1.90:1.
+ * `sidePlaneClearance` above answers that question. This one answers only
+ * which side of the axis a point lies on, which does not depend on height,
+ * and is therefore the one framing question a floor plan can settle.
  */
 function offAxisAngle(
   pose: { bearing: number; radial: number },
