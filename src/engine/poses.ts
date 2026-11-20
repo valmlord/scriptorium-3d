@@ -61,8 +61,21 @@ const HALF_SIDE_ANGLE = Math.PI / HEXAGON_SIDES;
  * background colour: no corridor is built yet, and a quarter of the opening
  * frame was that hole rather than a room (issue #46). Looking at the corner
  * instead puts a shelved wall under each half of the frame and both doorways
- * behind the camera's shoulders, which is also the only view that shows the
- * room turning rather than one flat wall of books.
+ * outside it, which is also the only view that shows the room turning rather
+ * than one flat wall of books.
+ *
+ * Outside it, not behind the camera, and by less than it looks. How far off
+ * the axis a doorway's near corner sits is not one angle: the axis is pitched
+ * down, so a frustum's side plane admits an angle that depends on the point's
+ * height, and that corner runs from 46.4 degrees at the floor to 51.0 at the
+ * ceiling against a frame reaching 44.6 at 16:9. The floor plan says 49.1 at
+ * every height, which is the figure this comment used to quote, and it is the
+ * value the edge would have if the pitch were zero.
+ *
+ * Taken properly the clearance runs out at about 1.90:1 and the hole is on
+ * screen by about 1.97:1, so a 2:1 display shows it. 16:9 is comfortable and
+ * an ultrawide is not. `__tests__/poses.test.ts` asserts the 16:9 case
+ * against the camera's own side plane rather than against a plan angle.
  *
  * It is the right place to turn from, too: every wall is then within 150
  * degrees of where a flight starts, where facing wall 0 left the wall
@@ -73,11 +86,17 @@ const ROOM_BEARING = wallBearing(0) + HALF_SIDE_ANGLE;
 /**
  * How far the room level stands from the middle of the room, *away* from the
  * corner it looks at rather than towards it. That puts the camera 2.25 m from
- * the corner, where a `CAMERA_FOV` frame reaches from 0.07 m to 2.56 m: the
- * corner's whole height, shelf run and ceiling together, with only the
- * nearest strip of floor out of view. The walls stand nearer than the corner
- * does, so towards the edges of the frame the lowest shelf runs off the
- * bottom; standing on the near side would crop every wall that way.
+ * the corner, where a `CAMERA_FOV` frame reaches from -0.01 m to 2.51 m: the
+ * corner's whole height, shelf run and ceiling together, and the floor line
+ * at its foot.
+ *
+ * Only at its foot, though. The bottom edge of the frame crosses the floor at
+ * 2.23 m of horizontal travel, so what is in view is a sliver under two
+ * centimetres deep at the corner and nothing nearer: the reader is looking at
+ * the room from above its floor, not across it. The walls also stand nearer than
+ * the corner does, so towards the edges of the frame the lowest shelf and the
+ * ceiling both fall outside it. Standing on the near side would crop every
+ * wall that way.
  *
  * It is also what keeps the doorways out of the frame, and the direction is
  * the one nobody guesses: backing *further* off swings them back into view,
