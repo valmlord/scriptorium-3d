@@ -35,11 +35,18 @@ export function cursorOnCanvas(page: Page): Promise<string> {
 /**
  * The first point of a scan over the canvas that is over a volume.
  *
- * It stops there, and nothing in the suite needs the whole scan: the scenarios
- * that find a spine need *a* spine, and one that found every one of them paid
- * 63 pointer moves and 63 round trips to the page for the 62 it discarded.
- * Under the default worker count that was two scenarios of M5 timing out while
- * five pages shared the machine.
+ * It stops there, and that is what keeps the scan off the clock (#54). A
+ * browser that draws this scene without a GPU (headless Chromium uses
+ * SwiftShader even on a machine that has one) makes every round trip to the
+ * page wait on its render loop, so a pointer move or a cursor read costs
+ * whatever software rendering costs on that machine at that moment. The whole
+ * grid is 63 of each, so a scan that did not stop was 126 such round trips,
+ * raced against the fixed test timeout, and lost it whenever the machine was
+ * slow enough. Stopping at the first hit makes the number of round trips a
+ * property of the room's layout instead of the machine's speed: when #54 was
+ * measured, the first point of the grid was already over a volume at the
+ * opening vantage. The measurements, and the machines they were taken on, are
+ * in the pull request that closed #54.
  */
 export async function findVolume(page: Page): Promise<CanvasPoint | null> {
   const [first] = await scanForVolumes(page);
