@@ -1,11 +1,17 @@
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
+import { isApplicationMessage } from './console';
 
 test('app boots with valid WebGL context and no console errors', async ({ page }) => {
   const consoleErrors: string[] = [];
   const consoleWarnings: string[] = [];
 
   page.on('console', (message) => {
+    // The browser's own GL driver messages are not the application's and are
+    // not asserted on; see `./console.ts`.
+    if (!isApplicationMessage(message.text())) {
+      return;
+    }
     if (message.type() === 'error') {
       consoleErrors.push(message.text());
     } else if (message.type() === 'warning') {

@@ -29,3 +29,65 @@ export class InvalidInstanceSlotError extends Error {
     this.max = max;
   }
 }
+
+/**
+ * A shelf was named by a slot that is not the first of a shelf.
+ *
+ * The title atlas writes a whole shelf at a time, one row of cells per shelf
+ * (`./atlas.ts`), so a slot part-way along a shelf would write 32 cells
+ * beginning in the middle of one shelf and ending in the middle of the next.
+ * Every spine in both would then carry a title from the wrong book, which is
+ * exactly the plausible wrongness this project refuses to render.
+ */
+export class InvalidShelfSlotError extends Error {
+  readonly slot: number;
+  readonly booksPerShelf: number;
+
+  constructor(slot: number, booksPerShelf: number, spinesPerRoom: number) {
+    super(
+      `Instance slot ${String(slot)} does not begin a shelf: a shelf starts at a multiple of ${String(booksPerShelf)} below ${String(spinesPerRoom)}`
+    );
+    this.name = 'InvalidShelfSlotError';
+    this.slot = slot;
+    this.booksPerShelf = booksPerShelf;
+  }
+}
+
+/**
+ * A set of titles arrived for a shelf without being a whole shelf of them.
+ *
+ * The worker client fans a shelf out over one request per volume and
+ * aggregates them in volume order, so a short list is a bug on the way here
+ * rather than a shelf with gaps in it. Writing it would leave the end of the
+ * atlas row holding the titles of whichever shelf used it last.
+ */
+export class ShelfTitleCountError extends Error {
+  readonly received: number;
+  readonly expected: number;
+
+  constructor(received: number, expected: number) {
+    super(
+      `A shelf was given ${String(received)} titles and holds ${String(expected)} volumes`
+    );
+    this.name = 'ShelfTitleCountError';
+    this.received = received;
+    this.expected = expected;
+  }
+}
+
+/**
+ * The browser would not give a 2D context for the title atlas.
+ *
+ * Refused by name rather than carried on as a room without titles: a context
+ * request fails when the canvas is already bound to another context type or
+ * when the process has run out of them, and both are conditions the next
+ * thing to ask for a context will hit as well.
+ */
+export class Canvas2dUnavailableError extends Error {
+  constructor() {
+    super(
+      'A 2D canvas context is not available, so the spine title atlas cannot be drawn'
+    );
+    this.name = 'Canvas2dUnavailableError';
+  }
+}

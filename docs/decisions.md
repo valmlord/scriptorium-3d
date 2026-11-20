@@ -1930,6 +1930,18 @@ what the built bundle contains, and the lint rule cannot help, because it is phr
 shape as ADR-0028's open question about test durations, and it wants an issue of its own rather than a
 sentence here.
 
+**Closed by M6, and the prediction was exact.** It happened as written: `src/main.ts` imported
+`@worker/client`, `cache.ts` took `TITLE_LENGTH` from the barrel, and `DOMAIN_TAG` appeared in the
+production main-thread chunk. The detector worked — a person read this paragraph, in the judge round of
+#44 — which is also the argument against leaving one that way. The move named above is done:
+`TITLE_LENGTH` is in `@core/format` and `TITLE_SHIFT` stayed behind in `library.ts`, because the
+derivation is generation arithmetic and only the constant was ever the problem. And the guard that was
+missing exists: `src/__tests__/production-bundle.test.ts` asserts that the main-thread chunk does not
+contain `DOMAIN_TAG` and that the worker's does, keyed on the constant itself rather than on a copy of
+its spelling. **What it closes is a transitive closure, which is the part no lint rule can reach**: every
+edge of `main.ts` to `@worker/client` to `cache.ts` to `@core/index` is legal on its own, and only the
+path is not. ADR-0032 records the measurement.
+
 **Consequence.** `architecture.md` §1's claim about itself is true again, and it is true of eight blocks
 rather than five, under two rules rather than one. `src/app/url.ts` imports `@core/address`,
 `@core/errors` and `@core/format` instead of the barrel, and `src/worker/client.ts`, `protocol.ts` and
@@ -2235,3 +2247,193 @@ tightening it to 93 are in that record's answered question, and it is not done h
 recalibrated on the run that moved its floor is the ADR-0013 mistake. And the upstream report — that
 a Vitest run in which no test ran at all is reported as a survival — is written down for a Stryker
 issue and acted on from the test side only.
+
+---
+
+## ADR-0032 — A page turn is ADR-0030's interruption model, with the DOM in the place of the rig
+
+**Decision.** Page turning reuses ADR-0030 rather than answering interruption a second time. The
+correspondence is written out here because it is not quite term for term, and the one rule of
+ADR-0030 that has nothing to do in a reader is named rather than left to be noticed:
+
+| ADR-0030, the camera                                  | M6, the reader                                      |
+| ----------------------------------------------------- | --------------------------------------------------- |
+| The machine commits on the event                      | The machine commits on the event                    |
+| The rig is a pure function of the playhead            | The DOM is a pure function of the machine's address |
+| An interruption kills the playhead tween, never a leg | An interruption cancels the request, never a write  |
+| A route disagreement retreats to the last shared stop | Nothing to retreat from: a turn has no stops        |
+
+1. **The machine commits on the event.** The instant a turn is accepted the FSM is at the new page
+   and `addressOf` names it. There is no "turning" state, for the reason ADR-0030 gives for there
+   being no "flying" state: the overlays and the URL are projections of the machine
+   (`architecture.md` §4), so a second event arriving mid-turn would be read against a page the
+   user has already left.
+2. **The view is written only while the machine has that page open.** That single line in
+   `src/ui/reader.ts` is what makes an interrupted turn safe, and it is ADR-0030's second rule with
+   the DOM in the place of the rig: the 80 line elements are a function of the machine's address
+   and of nothing else — not of which reply arrived first, not of whether a page was cached.
+3. **An interruption cancels the request in flight and issues another.** It never writes part of a
+   page and never writes a reply the machine has moved past. `GenerationRequest.cancel()` is what
+   stops the worker computing a page nobody is waiting for (ADR-0016), and the rule above is what
+   makes the reply that was already in flight a non-event.
+
+**Why rule 4 is vacuous here, and why that is not a loosening.** A flight's route is a path through
+rig space with the levels standing on it, so two routes that disagree have a last point in common,
+and the playhead has to come back to it before what hangs below can be replaced — that is ADR-0030's
+retreat. A page turn has no such path. There are two pages in the question, the one on screen and
+the one asked for, and the thing that would be "rebuilt under a moving playhead" is a single write
+of 80 line elements, which either happens or does not. The last stop the old and the new turn still
+agree on is the page already on screen, and the reader is standing exactly there: it keeps showing
+it until the new page has arrived whole. So the retreat has nothing to do, rather than being skipped.
+
+**Why the turn is not a timeline.** It could be. A page could slide across the panel, and then the
+lag would be a movement, the playhead would be the thing interrupted, and ADR-0030 would apply
+literally and without a word of this record. It is not a timeline because the lag in a page turn is
+not a movement but a generation: 1.0 to 2.3 ms of worker time on the four machines of ADR-0005, with
+nothing to interpolate between the old page and the new one. `@ui` may not import `gsap` either
+(`architecture.md` §1, ADR-0004), so an animated turn is a `@motion` timeline driven from `@app` —
+which is where it goes if M10 adds one, and this record does not change when it does.
+
+**Why the event names a page and not a direction.** Every other event in the table names where to go
+(`select-wall`, `select-shelf`, `select-volume`), and a `turn-page` carrying a delta would be the one
+that does not. It also moves the arithmetic into the machine: the component `core` validates would be
+one the caller never saw, so a refusal would name a page nobody asked for. The reader computes
+`page + 1` from `addressOf` and the machine refuses it or does not, which is the same shape as a
+click on a spine.
+
+**What consistency means here, precisely.** At every instant: the machine names a page, the reader
+shows a page it has received whole, and `aria-busy` on the page element says whether those two are
+the same. The machine and the view may disagree about **which page is on screen**, because that
+disagreement is what a generation is. They may not disagree about **which page is being opened**.
+
+**Two guards, not one, and the difference is what this record got wrong first.** The sentence above
+is a statement about the whole reader — the 80 lines, the status line and `aria-busy` together — and
+the rule "write only while the machine has that page open" does not carry it alone. A write is about
+a page, so the address answers it. A **refusal** is about a _request_: a cancelled request rejects
+(ADR-0016), and the machine can leave a page and come back to it inside a single task, so by the
+time that rejection runs its address may be open again. Guarded on the address alone, the reader
+then reports a page that is generating fine as one that could not be generated, and sets
+`aria-busy` to `false` while the article still holds the previous page — the exact instant this
+paragraph says cannot exist. It was reached in Chromium with three ordinary clicks in one task
+(`next`, `next`, `previous`), by the judge round of this milestone, against a reader that had
+implemented this record faithfully.
+
+So `refuse` requires the reply to be the request still in flight as well, and `accept` deliberately
+does not: a reply carrying the right text for the open page is the right text, whichever request
+fetched it. One rule for the DOM, two conditions for the refusal, and the reason they differ is
+that a cancellation is not a fact about a page. That is also why neither path inspects an error
+class — "is this still what the machine is asking for" answers both, which is the only part of the
+original single-rule table that survived unchanged.
+
+**The superseded reply is not a hypothetical.** It is the ordinary case of turning back and forth: a
+page the client has already cached resolves inside the same task as the turn that asked for it
+(`cache.ts` is read before the boundary, ADR-0005), so two turns dispatched together produce two
+replies that land in the order the user did not ask for, and cancellation cannot help — a resolved
+promise has nothing left to cancel. `e2e/reader.spec.ts` holds both cases: a turn interrupted while
+the worker is still generating, and a turn superseded by a cache hit in its own task.
+
+**Alternatives rejected.**
+
+- _Queue the turns and apply them one at a time._ The reader then keeps opening pages the user has
+  already left, and the queue becomes a second record of where the user is going, which is what
+  `architecture.md` §4 exists to forbid. ADR-0030 rejected the same thing for the camera.
+- _Blank the page while a turn is in flight._ Every turn flickers, and an interrupted turn leaves an
+  empty reader. `aria-busy` and the status line report the same fact without taking the text away.
+- _Write the lines as they arrive._ There is nothing to stream: a page is one `getPage` and arrives
+  whole. A partially written page is 3200 characters that exist at no address, which is this
+  project's definition of the wrong kind of wrong.
+- _Render the page to a canvas and animate that._ The milestone is that the text is real DOM text,
+  selectable and readable by a screen reader (SPEC §8). A texture is the thing being replaced.
+
+**Consequence.**
+
+- `waitForIdle()` grows from the camera to four sources: the flight, the worker client's request
+  table, the reader, and the title resolver (`docs/testing.md` §7). The composition is
+  `src/app/idle.ts`, and the property that needed a test is that one pass over the sources is not
+  an answer — a page arriving leaves the client quiet and the reader writing.
+- **What the atlas costs to send, which is the figure the redraw rule rests on. This bullet is the
+  only place any of these numbers is stated; the code and the tests cite it and restate nothing.**
+  Measured in the built application on an Apple M4, Chromium through Playwright 1.62.1, Node
+  v22.23.1. Drawing a shelf's 32 cells is 0.0 ms median and 0.2 ms at worst. Sending the atlas is
+  the expensive half, because three.js has no partial upload for a `CanvasTexture` and `needsUpdate`
+  sends all 1024 by 2048 pixels: an animation callback carrying one goes from a 0.1 ms median to
+  between 3 and 7 ms, three runs of the same measurement on the same machine landing at 4.4, 3.3 and
+  6.6 ms. **The order of magnitude reproduces and the endpoints do not**, which is why there is no
+  point value here for either the callback or the upload inside it - an earlier draft of this bullet
+  kept "3.4 ms" for the upload beside the range for the callback that contains it, and the two could
+  not both be right. Milliseconds where a turn costs tenths is the whole of what the rule needs.
+  So `engine/titles.ts` leaves a shelf it already holds alone, and `app/titles.ts` asks the atlas
+  what it holds before fanning a shelf out over 32 cache reads, each of which renders a key from the
+  room's linear index. That fan-out is 2.3 ms of `bigint` work per navigation event at the
+  deepest room: 2.26 to 2.68 over 31 runs under `vite-node`, median 2.28, against 1.4 to 1.9
+  microseconds for asking the atlas which shelves it holds - not the tens of nanoseconds an earlier
+  draft of this bullet claimed, which was the cost of the `includes` alone rather than of
+  `isAlreadyDrawn` as written, since reaching the shelf index converts the room as well. Re-taken because two copies of it had
+  drifted to 2.31 and 2.47, and taken again after a first attempt reported a median of 3.1 from nine
+  runs that had not warmed up - which is how a figure of this shape goes wrong, and the reason the
+  run count is given beside it. The room is the one a deep link reaches (M8): its index is 4975
+  decimal digits, and its name, which is what a URL and a console line carry, is 3197 base-36
+  characters. After both rules, a page turn costs no upload and a 0.1 ms median callback, and the
+  first shelf of a room costs one callback of 9.2 to 9.6 ms while the camera is still flying.
+- **That fan-out is about twenty times larger than it needs to be, and nothing else in this
+  repository said so.** A cache key is the address's linear index in base `RADIX` (`@worker/cache`),
+  and the room term dominates a 16545-bit index while being identical for all 32 volumes of a
+  shelf - so the 2.3 ms is one 3197-digit base-36 conversion performed 32 times. Rendering the room
+  once and appending each volume's remainder measured 0.11 ms against 2.29 ms over 31 runs, same
+  apparatus as above. That is a constant hoisted out of a loop; it lives in `pageKey`/`titleKey`
+  rather than in anything M6 wrote, and M6 is only what made it fire 32 times per navigation event
+  instead of once. Left alone here because the figure is paid once per shelf while the camera is
+  flying, and the rule above already skips it on a repeat ask, so collecting the 2.2 ms means
+  changing the worker's cache keys for a cost that is already inside budget - and `MAX_KEY_LENGTH`
+  would have to grow by a separator, since the budget counts keys. Recorded because an avoidable
+  2.2 ms with nowhere to live is how a figure stops being known.
+- The same rule serves the spine titles: a shelf of titles that arrives for a shelf the machine has
+  left changes nothing. Neither the reader nor the title resolver inspects an error class to tell a
+  cancellation from a failure, because the question "is this still what the machine is asking for"
+  answers both.
+- **A shelf the atlas refuses goes to the console, and it is the only `console` call in `src/`.** The
+  atlas takes exactly `BOOKS_PER_SHELF` titles beginning at a shelf boundary and the client fans a
+  shelf out over exactly that many requests, so a refusal is not a condition of the library but the
+  two sides having stopped agreeing — a bug on this side of the boundary. The reader sees nothing of
+  it: a spine cannot show an error, the shelf stays undrawn and is asked for again when the camera
+  next approaches, which is blank spines rather than a wrong title. But blank spines with no trace
+  get attributed to generation or to WebGL, so the resolver reports the shelf together with the
+  error (`onFailure` is required, not optional, because the composition root is the only party that
+  could decide) and `src/main.ts` writes it out with the wall, the shelf and a bounded prefix of the
+  room's name, bounded because the last room's name is 3197 characters. `e2e/reader.spec.ts` asserts a clean
+  console over the whole reading flow, so this line appearing in a run is a failed test rather than
+  noise someone has to notice.
+- A turn whose page genuinely fails to generate leaves the last page on screen and says so in the
+  status line. That branch is not reachable from the interface in M6 — every address the machine
+  produces is valid and the worker answers every message exactly once — so it carries no test, and
+  that is stated here rather than implied by its absence. What it must not do is **strand** the
+  reader: the length of an arriving page is therefore checked before anything is written or
+  forgotten, and a page of the wrong length is refused at the worker boundary that owns malformed
+  replies (`takePage` in `client.ts`) rather than thrown inside a `then`, where it would have become
+  an unhandled rejection with `settled` left behind and `waitForIdle()` waiting for a page that was
+  never coming.
+- **The reader has no unit tests, and cannot have them as the project stands.** `vitest` runs in the
+  `node` environment and no DOM environment is installed, so `src/ui/reader.ts` is reachable only
+  from Playwright: the whole of the rule above rests on the end-to-end scenarios and on nothing else. Three
+  orderings are covered, and the third one is there because the first judge round of M6 found it by
+  reading: a cancelled request whose page the machine returns to inside the same task, which
+  `e2e/reader.spec.ts`'s "a cancelled turn to a page the machine returns to is not reported as a
+  failure" performs as `next, next, previous`. The second round of the same review found that
+  sentence claiming a test that did not yet exist, which is worse than admitting a gap, so the test
+  is named here and the two others beside it are "a page turn interrupted mid-flight" and "a turn
+  superseded by a cached page". That is the cost of this layer having no test environment, and it is
+  recorded rather than left to be discovered a fourth time.
+- **M6 is the change that put `core`'s generation surface into the main-thread bundle, and ADR-0029
+  predicted exactly that.** Its open paragraph said the shipped bundle contained no `getPage`
+  "because neither `app/url.ts` nor the worker client is in the entry graph yet", and named a person
+  reading that paragraph as the only detector. `src/main.ts` now imports `@worker/client`, which
+  imports `cache.ts`, which needed `TITLE_LENGTH` from `library.ts` — one constant, and with it
+  `prf`, `feistel`, `library` and `@noble/hashes`, measured as `DOMAIN_TAG` appearing in the
+  production main-thread chunk. Why no rule caught it: the layer rule decides one import edge at a
+  time, and every edge on that path is legal — `@app` may import `@worker/client`, and `@worker` may
+  import the barrel because the worker is the layer that generates. Only the transitive closure is
+  illegal, and a lint rule cannot see a closure. `TITLE_LENGTH` has moved beside `FORMAT_VERSION` in
+  `@core/format`, which is the move ADR-0029 itself named, and the closure is now checked at the
+  bundle in `src/__tests__/production-bundle.test.ts`: the main-thread chunk must not contain
+  `DOMAIN_TAG` and the worker's must. ADR-0029's open paragraph is closed by that test rather than
+  by this sentence.

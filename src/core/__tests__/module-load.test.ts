@@ -115,7 +115,14 @@ describe('the PRF tables', () => {
 
 describe('the library constants', () => {
   it('computes the title shift while loading', async () => {
-    const { TITLE_LENGTH, TITLE_SHIFT } = await import('../library');
+    // `TITLE_SHIFT` is what this test is here for: a module body that
+    // computes something, where a mutant would otherwise survive. The length
+    // it is derived from lives in `format.ts` since ADR-0032 — it is read on
+    // the main thread to budget a cache entry, and holding it here put the
+    // whole generation surface into the main-thread bundle — while the
+    // derivation stays behind, because that part is generation arithmetic.
+    const { TITLE_SHIFT } = await import('../library');
+    const { TITLE_LENGTH } = await import('../format');
 
     expect(TITLE_LENGTH).toBe(25);
     expect(TITLE_SHIFT).toBe(36n ** 3175n);

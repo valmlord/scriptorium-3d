@@ -1,5 +1,4 @@
 import { expect, test } from '@playwright/test';
-import type { Page } from '@playwright/test';
 import {
   hookAddress,
   hookFramesRefusal,
@@ -8,6 +7,12 @@ import {
   hookRig,
   waitForIdle,
 } from './debug-hook';
+import {
+  CURSOR_OVER_VOLUME,
+  clickFirstVolume,
+  cursorOnCanvas,
+  findVolume,
+} from './spines';
 
 /**
  * M5's end-to-end scenario: the room is a place you move through.
@@ -24,45 +29,8 @@ import {
  * asked about a build it is not running.
  */
 
-/** Where to look for a spine: a grid over the middle of the canvas. */
-const SCAN_COLUMNS = 9;
-const SCAN_ROWS = 7;
-
 /** The top of the frame at the room's vantage is ceiling, not shelf. */
 const CEILING_FRACTION = 0.04;
-
-/** The cursor the controls set over a volume. */
-const CURSOR_OVER_VOLUME = 'pointer';
-
-function cursorOnCanvas(page: Page): Promise<string> {
-  return page.evaluate(() => {
-    const canvas = document.getElementById('canvas');
-    return canvas instanceof HTMLCanvasElement ? canvas.style.cursor : 'missing';
-  });
-}
-
-/** Every point of a scan over the canvas where the pointer is over a volume. */
-async function pointsOverVolumes(page: Page): Promise<{ x: number; y: number }[]> {
-  const canvas = page.locator('canvas#canvas');
-  const box = await canvas.boundingBox();
-  expect(box).not.toBeNull();
-  if (box === null) {
-    return [];
-  }
-
-  const found: { x: number; y: number }[] = [];
-  for (let column = 1; column <= SCAN_COLUMNS; column += 1) {
-    for (let row = 1; row <= SCAN_ROWS; row += 1) {
-      const x = box.x + (box.width * column) / (SCAN_COLUMNS + 1);
-      const y = box.y + (box.height * row) / (SCAN_ROWS + 1);
-      await page.mouse.move(x, y);
-      if ((await cursorOnCanvas(page)) === CURSOR_OVER_VOLUME) {
-        found.push({ x, y });
-      }
-    }
-  }
-  return found;
-}
 
 test('the debug hook answers where the application is', async ({ page }) => {
   await page.goto('/');
@@ -97,9 +65,9 @@ test('the pointer tells a volume from the fabric of the room', async ({ page }) 
   const box = await canvas.boundingBox();
   expect(box).not.toBeNull();
 
-  const overVolumes = await pointsOverVolumes(page);
+  const overVolume = await findVolume(page);
 
-  expect(overVolumes.length).toBeGreaterThan(0);
+  expect(overVolume).not.toBeNull();
   // And the ceiling is not a book: a hover that answered "yes" everywhere
   // would pass the assertion above and mean nothing.
   await page.mouse.move(
@@ -122,12 +90,7 @@ test('clicking a volume flies to it, and Escape flies back', async ({ page }) =>
 
   await page.goto('/');
   await waitForIdle(page);
-  const [target] = await pointsOverVolumes(page);
-  expect(target).toBeDefined();
-
-  await page.mouse.move(target?.x ?? 0, target?.y ?? 0);
-  await page.mouse.down();
-  await page.mouse.up();
+  await clickFirstVolume(page);
   await waitForIdle(page);
 
   // One click from the room level descends the whole ladder: the wall, then

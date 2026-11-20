@@ -20,3 +20,13 @@ body {
 #canvas {
   display: block;
 }
+
+/*
+ * The reader's monospace stack, declared here because a custom property is
+ * only inherited from an element that is in the document before the overlay is
+ * built. The reasoning for the stack itself is in `ui/reader.css`.
+ */
+:root {
+  --reader-font:
+    'DejaVu Sans Mono', 'Liberation Mono', Menlo, Consolas, 'Courier New', monospace;
+}

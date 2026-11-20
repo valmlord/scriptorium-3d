@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   BOOKS_PER_SHELF,
+  PAGES_IN_LAST_ROOM,
+  PAGES_PER_BOOK,
   ROOM_COUNT,
   SHELVES_PER_WALL,
   WALLS_PER_ROOM,
@@ -35,7 +37,7 @@ import type {
 /**
  * An FSM is a finite object, so "we tested the paths we thought of" is a
  * choice rather than a limitation (`docs/testing.md` §1). The first suite below
- * asserts all sixteen `(level, event)` pairs: four levels times four events,
+ * asserts all twenty `(level, event)` pairs: four levels times five events,
  * each one legal or refused, with nothing left to assumption.
  *
  * The transition table in `navigation.ts` is data, and `transition` is code
@@ -52,6 +54,12 @@ const WALL = 1;
 const SHELF = 2;
 const VOLUME = 3;
 
+/**
+ * The page a turn asks for. Not 0, which is the page a book is entered at, so
+ * that a test cannot pass by a turn being a no-op.
+ */
+const PAGE = 7;
+
 /** The state at one named level, narrowed out of the union. */
 type StateAt<Level extends NavigationLevel> = Extract<
   NavigationState,
@@ -62,13 +70,24 @@ const STATES: { readonly [Level in NavigationLevel]: StateAt<Level> } = {
   room: { level: 'room', room: ROOM },
   wall: { level: 'wall', room: ROOM, wall: WALL },
   shelf: { level: 'shelf', room: ROOM, wall: WALL, shelf: SHELF },
-  book: { level: 'book', room: ROOM, wall: WALL, shelf: SHELF, volume: VOLUME },
+  book: {
+    level: 'book',
+    room: ROOM,
+    wall: WALL,
+    shelf: SHELF,
+    volume: VOLUME,
+    page: 0,
+  },
 };
+
+/** The same book, turned to `PAGE`. */
+const TURNED: StateAt<'book'> = { ...STATES.book, page: PAGE };
 
 const EVENTS: Readonly<Record<NavigationEventType, NavigationEvent>> = {
   'select-wall': { type: 'select-wall', wall: WALL },
   'select-shelf': { type: 'select-shelf', shelf: SHELF },
   'select-volume': { type: 'select-volume', volume: VOLUME },
+  'turn-page': { type: 'turn-page', page: PAGE },
   back: { type: 'back' },
 };
 
@@ -101,13 +120,18 @@ const LADDER: readonly NavigationState[] = [
   ),
   ...WALLS.flatMap((wall) =>
     SHELVES.flatMap((shelf) =>
-      VOLUMES.map((volume): NavigationState => ({
-        level: 'book',
-        room: ROOM,
-        wall,
-        shelf,
-        volume,
-      }))
+      VOLUMES.flatMap((volume) =>
+        // Both the page a book is entered at and a page it has been turned to,
+        // so the routes below cover a turn as well as a descent.
+        [0, PAGE].map((page): NavigationState => ({
+          level: 'book',
+          room: ROOM,
+          wall,
+          shelf,
+          volume,
+          page,
+        }))
+      )
     )
   ),
 ];
@@ -147,18 +171,19 @@ describe('the transition table', () => {
     }
   );
 
-  it('declares six of its sixteen pairs legal, and not one more', () => {
+  it('declares seven of its twenty pairs legal, and not one more', () => {
     const legal = ALL_PAIRS.filter((pair) =>
       isLegalTransition(pair.level, pair.eventType)
     );
 
-    expect(ALL_PAIRS).toHaveLength(16);
+    expect(ALL_PAIRS).toHaveLength(20);
     expect(legal.map((pair) => `${pair.level}:${pair.eventType}`)).toEqual([
       'room:select-wall',
       'wall:select-shelf',
       'wall:back',
       'shelf:select-volume',
       'shelf:back',
+      'book:turn-page',
       'book:back',
     ]);
   });
@@ -187,14 +212,84 @@ describe('descending the ladder', () => {
     });
   });
 
-  it('opens a volume from a shelf, keeping the wall and the shelf', () => {
+  it('opens a volume from a shelf at its first page', () => {
     expect(transition(STATES.shelf, { type: 'select-volume', volume: 31 })).toEqual({
       level: 'book',
       room: ROOM,
       wall: WALL,
       shelf: SHELF,
       volume: 31,
+      page: 0,
     });
+  });
+});
+
+describe('turning a page inside a book', () => {
+  it('opens the page the event names, keeping the volume', () => {
+    expect(transition(STATES.book, { type: 'turn-page', page: PAGE })).toEqual(TURNED);
+  });
+
+  it('stays at the book level, because a turn moves no camera', () => {
+    const turned = transition(STATES.book, { type: 'turn-page', page: PAGE });
+
+    expect(turned.level).toBe('book');
+    expect(depthOf(turned.level)).toBe(depthOf(STATES.book.level));
+  });
+
+  it('turns from one page to another without passing through the first', () => {
+    // The event names a page rather than a direction, so two turns arriving
+    // together name two pages and the second one wins (ADR-0032).
+    const navigation = createNavigation(ROOM);
+    navigation.dispatchAll(eventsTo(navigation.state, STATES.book));
+
+    navigation.dispatch({ type: 'turn-page', page: 1 });
+    const reached = navigation.dispatch({ type: 'turn-page', page: 2 });
+
+    expect(addressOf(reached)?.page).toBe(2);
+  });
+
+  it('refuses a page outside the 410 of a volume, through core', () => {
+    expect(() =>
+      transition(STATES.book, { type: 'turn-page', page: PAGES_PER_BOOK })
+    ).toThrow(InvalidAddressError);
+    expect(() => transition(STATES.book, { type: 'turn-page', page: -1 })).toThrow(
+      InvalidAddressError
+    );
+  });
+
+  it('refuses a page that is not an integer, naming it', () => {
+    expect(() => transition(STATES.book, { type: 'turn-page', page: 1.5 })).toThrow(
+      NonIntegerComponentError
+    );
+    expect(() => transition(STATES.book, { type: 'turn-page', page: 1.5 })).toThrow(
+      /"page" must be an integer, received 1.5/
+    );
+  });
+
+  it('refuses a turn anywhere but in a book', () => {
+    for (const level of ['room', 'wall', 'shelf'] as const) {
+      expect(() =>
+        transition(STATES[level], { type: 'turn-page', page: PAGE })
+      ).toThrow(IllegalTransitionError);
+    }
+  });
+
+  it('refuses the page beyond the end of the library in the last volume', () => {
+    // SPEC §3: the last room holds 261 376 pages, so its last existing volume
+    // is slot 637 — wall 3, shelf 4, volume 29 — and the library ends part-way
+    // through it rather than at a volume boundary.
+    const tail = atBookAddress({
+      room: ROOM_COUNT - 1n,
+      wall: 3,
+      shelf: 4,
+      volume: 29,
+    });
+    const lastPage = Number(PAGES_IN_LAST_ROOM % BigInt(PAGES_PER_BOOK)) - 1;
+
+    expect(transition(tail, { type: 'turn-page', page: lastPage }).level).toBe('book');
+    expect(() => transition(tail, { type: 'turn-page', page: lastPage + 1 })).toThrow(
+      AddressBeyondLibraryError
+    );
   });
 });
 
@@ -357,6 +452,29 @@ describe('the route between two states', () => {
     ]);
   });
 
+  it('turns the page without leaving the book it is in', () => {
+    expect(eventsTo(STATES.book, TURNED)).toEqual([{ type: 'turn-page', page: PAGE }]);
+  });
+
+  it('opens a volume at its first page and then turns to the page asked for', () => {
+    // A descent arrives at page 0 (SPEC §6), so reaching any other page is a
+    // turn appended to the descent rather than a component of it.
+    expect(eventsTo(STATES.room, TURNED)).toEqual([
+      { type: 'select-wall', wall: WALL },
+      { type: 'select-shelf', shelf: SHELF },
+      { type: 'select-volume', volume: VOLUME },
+      { type: 'turn-page', page: PAGE },
+    ]);
+  });
+
+  it('does not turn a page it is already on when descending to page 0', () => {
+    expect(eventsTo(TURNED, STATES.book)).toEqual([{ type: 'turn-page', page: 0 }]);
+    expect(eventsTo(STATES.room, STATES.book)).not.toContainEqual({
+      type: 'turn-page',
+      page: 0,
+    });
+  });
+
   it('climbs to the room before descending another wall', () => {
     const elsewhere: NavigationState = {
       level: 'book',
@@ -364,6 +482,7 @@ describe('the route between two states', () => {
       wall: WALL + 1,
       shelf: 0,
       volume: 0,
+      page: 0,
     };
 
     expect(eventsTo(STATES.book, elsewhere)).toEqual([
@@ -385,13 +504,20 @@ describe('the route between two states', () => {
 });
 
 describe('the address a state names', () => {
-  it('is the volume at page 0 once a book is open', () => {
+  it('is the page the book is open at', () => {
     expect(addressOf(STATES.book)).toEqual({
       room: ROOM,
       wall: WALL,
       shelf: SHELF,
       volume: VOLUME,
       page: 0,
+    });
+    expect(addressOf(TURNED)).toEqual({
+      room: ROOM,
+      wall: WALL,
+      shelf: SHELF,
+      volume: VOLUME,
+      page: PAGE,
     });
     expect(bookAddressOf(STATES.book)).toEqual({
       room: ROOM,
@@ -412,6 +538,12 @@ describe('the address a state names', () => {
     const address = { room: ROOM, wall: 3, shelf: 4, volume: 31 };
 
     expect(bookAddressOf(atBookAddress(address))).toEqual(address);
+  });
+
+  it('opens a book at its first page', () => {
+    expect(
+      addressOf(atBookAddress({ room: ROOM, wall: 3, shelf: 4, volume: 31 }))
+    ).toEqual({ room: ROOM, wall: 3, shelf: 4, volume: 31, page: 0 });
   });
 });
 

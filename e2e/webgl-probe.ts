@@ -31,6 +31,12 @@ export interface FrameDrawCalls {
   plain: number;
 }
 
+/** One texture upload: how large it was, in pixels. */
+export interface TextureUpload {
+  width: number;
+  height: number;
+}
+
 /** What the drawing buffer held, summarised so it survives a driver change. */
 export interface PixelSummary {
   /** Pixels read. */
@@ -47,6 +53,15 @@ export interface PixelSummary {
 export interface ProbeReport {
   frames: FrameDrawCalls[];
   pixels: PixelSummary | null;
+  /**
+   * Every texture upload, in order.
+   *
+   * Counted because a draw-call assertion cannot tell a room whose spines
+   * carry titles from one whose spines do not: both draw 640 instances in one
+   * call. The atlas reaches the GPU as a `texImage2D` of its own size, so this
+   * is how a test knows the titles it is asserting about are on screen.
+   */
+  uploads: TextureUpload[];
 }
 
 declare global {
@@ -64,7 +79,7 @@ const PIXEL_FRAME = 3;
  */
 export async function installWebGLProbe(page: Page): Promise<void> {
   await page.addInitScript((pixelFrame: number) => {
-    const report: ProbeReport = { frames: [], pixels: null };
+    const report: ProbeReport = { frames: [], pixels: null, uploads: [] };
     window.__webglProbe = report;
 
     let current: FrameDrawCalls | null = null;
@@ -126,6 +141,41 @@ export async function installWebGLProbe(page: Page): Promise<void> {
         }
         arrays(mode, first, count);
       };
+
+      // Both upload calls are counted, because which one a texture takes is
+      // three.js' choice and not the application's: on WebGL2 a canvas-backed
+      // texture is allocated once and then sent through `texSubImage2D`, which
+      // is the call the spine atlas actually makes.
+      //
+      // The size is read off the arguments rather than off fixed positions,
+      // because each call has a sized form and a source form: with a canvas
+      // the source comes last and carries its own dimensions, and in the sized
+      // form the width and height are the third and fourth numbers.
+      type AnyUpload = (...args: unknown[]) => void;
+      const countUploads = (name: 'texImage2D' | 'texSubImage2D'): void => {
+        const patchable = gl as unknown as Record<string, AnyUpload>;
+        const original = patchable[name]?.bind(gl);
+        if (original === undefined) {
+          return;
+        }
+        patchable[name] = (...args: unknown[]): void => {
+          const numbers = args.filter(
+            (argument): argument is number => typeof argument === 'number'
+          );
+          const source = args.at(-1);
+          report.uploads.push(
+            source !== null &&
+              typeof source === 'object' &&
+              'width' in source &&
+              'height' in source
+              ? { width: Number(source.width), height: Number(source.height) }
+              : { width: numbers[3] ?? 0, height: numbers[4] ?? 0 }
+          );
+          original(...args);
+        };
+      };
+      countUploads('texImage2D');
+      countUploads('texSubImage2D');
     };
 
     // Patched on the prototype, so the probe catches whichever canvas the

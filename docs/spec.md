@@ -114,7 +114,7 @@ of **exactly** `[0, N)` — no cycle-walking, no unreachable pages, no special c
 ROUNDS      = 10
 H           = 36 ** 1600
 DOMAIN_TAG  = "scriptorium.3d/v1"        // UTF-8; this string IS the library's identity
-PRF_BYTES   = 1051                       // ceil(1600 * log2(36) / 8) = 1035, plus 16 bytes
+PRF_BYTES   = 1051                       // ceil(1600 * log2(36) / 8) = 1034, plus 17 bytes
                                          // of slack so the modulo bias is below 2^-128
 ```
 

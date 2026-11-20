@@ -18,6 +18,12 @@ Application root. The layer allowed to import every other one, and the place whe
   only part of M5 that touches the DOM.
 - The debug hook in `debug.ts`: `window.__scriptorium` as `testing.md` section 7 specifies it,
   installed from `src/main.ts` in development and test builds only.
+- What idleness is made of, in `idle.ts`: the camera, the worker client's request table, the reader
+  and the title resolver, re-read after every settlement because settling one of them can make
+  another busy. `waitForIdle()` is composed from this and the hook holds no opinion of its own.
+- The title resolver in `titles.ts`: one shelf of 32 titles requested as the machine reaches a
+  shelf, cancelled when it leaves, and written onto that room's spines. A room is twenty shelves and
+  ADR-0005 measured one at 14.8 to 45.0 ms, so asking for a room is never what happens.
 
 ## What cannot be imported
 
@@ -32,6 +38,7 @@ Application root. The layer allowed to import every other one, and the place whe
 
 ## Responsibilities
 
+- Own the one `GenerationClient`, so the reader and the spine titles share one cache and one thread
 - Create the Three.js renderer and canvas
 - Initialize the FSM and listen for state changes
 - Wire up the UI to emit events to the FSM

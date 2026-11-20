@@ -1,0 +1,134 @@
+/*
+ * The reader's own styles, beside the module that builds its DOM.
+ *
+ * Two of these rules are load-bearing rather than decorative, and both are
+ * about the text being the page rather than a picture of one:
+ *
+ * `font-family` is a monospace stack, because the grid of `./page-grid.ts` is
+ * 40 columns only while every glyph has the same advance. The stack is chosen
+ * for Cyrillic coverage: DejaVu and Liberation carry the whole alphabet of
+ * SPEC section 2 on Linux, Menlo on macOS, Consolas on Windows, and the
+ * generic `monospace` is what is left.
+ *
+ * `white-space: pre` is mandatory. Symbol 0 of the alphabet is a space
+ * (SPEC section 2), runs of them are common in generated text, and HTML
+ * collapses whitespace by default: without this, a line of spaces renders as
+ * nothing and a selection copied out of the reader is not the page.
+ */
+
+.reader {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  /* The layer is only a layout box. Clicks outside the panel belong to the
+     room behind it, so a spine stays clickable while a book is open. */
+  pointer-events: none;
+  z-index: 1;
+}
+
+/*
+ * The `hidden` attribute is how the reader closes, and a class setting
+ * `display` outranks the user agent's own `[hidden] { display: none }`. Without
+ * this rule the overlay is on screen at every level, which also costs a frame:
+ * a visible element over the canvas takes it out of the compositor's fast path
+ * and the driver reports the readback as a stall.
+ */
+.reader[hidden] {
+  display: none;
+}
+
+.reader-panel {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-height: min(84vh, 60rem);
+  padding: 1rem 1.25rem 1.25rem;
+  border: 1px solid #4a4134;
+  border-radius: 0.25rem;
+  background-color: #17140f;
+  box-shadow: 0 1.5rem 3rem rgb(0 0 0 / 55%);
+}
+
+.reader-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  border-bottom: 1px solid #3a332a;
+  padding-bottom: 0.75rem;
+}
+
+.reader-title {
+  margin: 0;
+  color: #f2ebd8;
+  font-family: var(--reader-font);
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  /* A title is 25 characters of generated text (SPEC section 4) and wraps
+     nowhere sensible, so it is clipped rather than reflowing the panel. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reader-position,
+.reader-status {
+  margin: 0;
+  color: #bdb49f;
+  font-size: 0.8125rem;
+}
+
+.reader-controls {
+  display: flex;
+  gap: 0.5rem;
+  padding-top: 0.5rem;
+}
+
+.reader-button {
+  border: 1px solid #5c5241;
+  border-radius: 0.1875rem;
+  padding: 0.3125rem 0.75rem;
+  background-color: #2b251c;
+  color: #ece4d0;
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+
+.reader-button:hover:not(:disabled) {
+  background-color: #3a3326;
+}
+
+.reader-button:disabled {
+  /* Dimmed and still above the contrast floor: a control that cannot be used
+     must still be readable. */
+  color: #9a927f;
+  cursor: default;
+}
+
+.reader-button:focus-visible,
+.reader-page:focus-visible {
+  outline: 2px solid #d8c89a;
+  outline-offset: 2px;
+}
+
+.reader-page {
+  overflow-y: auto;
+  margin: 0;
+  color: #f0e9d6;
+  font-family: var(--reader-font);
+  font-size: 0.875rem;
+  line-height: 1.35;
+  /* The library's text is selectable, which is the milestone (SPEC section 8).
+     Nothing here may set `user-select: none`. */
+  user-select: text;
+}
+
+.reader-line {
+  margin: 0;
+  white-space: pre;
+  font-variant-ligatures: none;
+  tab-size: 1;
+}

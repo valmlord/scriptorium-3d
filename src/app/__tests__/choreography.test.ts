@@ -127,7 +127,7 @@ describe('choosing a volume', () => {
 
     // ADR-0030: the machine is the source of truth and the camera is a
     // projection that lags. A URL written now names the book the reader chose.
-    expect(choreography.state).toEqual({ level: 'book', ...TARGET });
+    expect(choreography.state).toEqual({ level: 'book', ...TARGET, page: 0 });
     expect(choreography.address).toEqual({ ...TARGET, page: 0 });
     expect(choreography.isIdle()).toBe(false);
     expectRigAt(choreography.rig(), ROOM_POSE);

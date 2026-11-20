@@ -1,4 +1,4 @@
-import { BOOKS_PER_SHELF, LIBRARY_SIZE, fromLinear } from '@core/address';
+import { BOOKS_PER_SHELF, LIBRARY_SIZE, PAGE_LENGTH, fromLinear } from '@core/address';
 import type { Address, BookAddress } from '@core/address';
 import { GenerationCache } from './cache';
 import {
@@ -180,6 +180,13 @@ export class GenerationClient {
   private readonly pending = new Map<RequestId, PendingRequest>();
 
   /**
+   * Who is waiting for `pending` to empty (`whenQuiet`). Released by `forget`,
+   * which is the one place an id leaves the table, so a waiter cannot be left
+   * behind by a settlement path nobody thought of.
+   */
+  private readonly quietWaiters: (() => void)[] = [];
+
+  /**
    * @param worker The worker to own. Its `onmessage` and `onerror` are
    * replaced.
    * @param cache The cache to read through. Injectable so that a caller can
@@ -207,6 +214,35 @@ export class GenerationClient {
   /** How many requests are issued and not yet settled. */
   get pendingCount(): number {
     return this.pending.size;
+  }
+
+  /** Whether nothing at all is in flight. */
+  get isQuiet(): boolean {
+    return this.pending.size === 0;
+  }
+
+  /**
+   * Resolves the next time nothing is in flight.
+   *
+   * This is the half of `waitForIdle()` that belongs to the thread
+   * (`docs/testing.md` §7): the end-to-end suite may not sleep on a duration,
+   * and `pendingCount` alone is a number a test would have to poll. Every
+   * request settles exactly once (see the header), and every settlement goes
+   * through `forget` below, so a table that empties is an event this client
+   * can report rather than a condition anyone has to watch for.
+   *
+   * It says nothing about what the *caller* then does with a result. A page
+   * arriving leaves this client quiet while the reader is still writing it to
+   * the DOM, which is why the hook composes this with the reader's own
+   * idleness instead of taking it for the whole answer (`src/app/idle.ts`).
+   */
+  whenQuiet(): Promise<void> {
+    if (this.isQuiet) {
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      this.quietWaiters.push(resolve);
+    });
   }
 
   /**
@@ -288,7 +324,7 @@ export class GenerationClient {
    * Generate one throwaway page at a fixed address and discard it.
    *
    * Called once on startup. It pays the cold-start cost — eight times a warm
-   * page, up to 12.1 ms (ADR-0005) — on a page nobody is waiting for, so that
+   * page, up to 12.4 ms (ADR-0005) — on a page nobody is waiting for, so that
    * the first page a reader asks for is a warm one.
    *
    * The result is discarded rather than cached: caching it would retain 6.4 KB
@@ -323,7 +359,7 @@ export class GenerationClient {
       if (pending === undefined) {
         continue;
       }
-      this.pending.delete(id);
+      this.forget(id);
       pending.fail(new CancelledRequestError(id, pending.request));
       const cancellation: CancelRequest = { kind: 'cancel', id };
       this.worker.postMessage(cancellation);
@@ -431,7 +467,7 @@ export class GenerationClient {
     if (pending === undefined) {
       return;
     }
-    this.pending.delete(id);
+    this.forget(id);
     switch (response.kind) {
       case 'page':
       case 'title':
@@ -462,6 +498,25 @@ export class GenerationClient {
     }
   }
 
+  /**
+   * Drop `id` from the table, which is what "settled" means here, and release
+   * anything waiting for the table to empty.
+   */
+  private forget(id: RequestId): void {
+    this.pending.delete(id);
+    this.releaseQuietWaiters();
+  }
+
+  /** Release the `whenQuiet` waiters, if there is now nothing in flight. */
+  private releaseQuietWaiters(): void {
+    if (!this.isQuiet) {
+      return;
+    }
+    for (const resolve of this.quietWaiters.splice(0)) {
+      resolve();
+    }
+  }
+
   /** Reject one pending request, if that id is pending at all. */
   private failIfPending(id: RequestId | null, error: (id: RequestId) => Error): void {
     if (id === null) {
@@ -471,7 +526,7 @@ export class GenerationClient {
     if (pending === undefined) {
       return;
     }
-    this.pending.delete(id);
+    this.forget(id);
     pending.fail(error(id));
   }
 
@@ -481,6 +536,7 @@ export class GenerationClient {
     // Cleared before any rejection runs, so a handler reacting to one of them
     // cannot observe a table that still claims those ids are in flight.
     this.pending.clear();
+    this.releaseQuietWaiters();
     for (const [id, pending] of abandoned) {
       pending.fail(new WorkerFailureError(id, pending.request, detail));
     }
@@ -488,7 +544,8 @@ export class GenerationClient {
 }
 
 /**
- * Create the worker this client drives.
+ * Create the worker this client drives, on the platform the application runs
+ * on.
  *
  * The `new Worker(new URL(...), { type: 'module' })` form is what Vite
  * recognises in order to build `./entry.ts` as a separate module graph
@@ -496,14 +553,60 @@ export class GenerationClient {
  * something the client does for itself so that the client stays constructible
  * without a `Worker` global, which is how `testing.md` §1 gets to test the
  * client without the thread.
+ *
+ * **It hands back an adapter rather than the `Worker` itself**, for the reason
+ * `GenerationWorkerLike` exists: a `Worker`'s `onmessage` takes a
+ * `MessageEvent`, which carries two dozen members this client never reads, and
+ * a handler written for the one member it does read is not assignable to it.
+ * The mapping is three lines because `postMessage` and the `message` event are
+ * the same two concepts on every platform the worker runs on — the Node thread
+ * in `__tests__/worker-thread.integration.test.ts` is adapted the same way.
  */
-export function createGenerationWorker(): Worker {
-  return new Worker(new URL('./entry.ts', import.meta.url), { type: 'module' });
+export function createGenerationWorker(): GenerationWorkerLike {
+  return new BrowserWorkerAdapter(
+    new Worker(new URL('./entry.ts', import.meta.url), { type: 'module' })
+  );
+}
+
+/** A `GenerationWorkerLike` over the platform's own `Worker`. */
+class BrowserWorkerAdapter implements GenerationWorkerLike {
+  onmessage: ((event: { readonly data: unknown }) => void) | null = null;
+  onerror: ((event: unknown) => void) | null = null;
+
+  constructor(private readonly worker: Worker) {
+    worker.onmessage = (event: MessageEvent): void => {
+      this.onmessage?.({ data: event.data });
+    };
+    worker.onerror = (event: unknown): void => {
+      this.onerror?.(event);
+    };
+  }
+
+  postMessage(message: unknown): void {
+    this.worker.postMessage(message);
+  }
+
+  terminate(): void {
+    this.worker.terminate();
+  }
 }
 
 function takePage(response: ResultResponse): Taken<string> {
   if (response.kind !== 'page') {
     return wrongKind('page', response.kind);
+  }
+  // A page is `PAGE_LENGTH` characters (SPEC §1), and `response.ts` narrows
+  // the field to a string without measuring it. Refused here, where every
+  // other unusable reply is refused, so that a caller gets a
+  // `MalformedResponseError` naming the lengths instead of 3199 characters
+  // that lay out as a grid with one gap nobody would see. It is reachable only
+  // from a main thread and a worker built from different code, which is the
+  // skew `response.ts`'s own header names.
+  if (response.text.length !== PAGE_LENGTH) {
+    return {
+      ok: false,
+      detail: `a page of ${String(response.text.length)} characters, and a page is ${String(PAGE_LENGTH)}`,
+    };
   }
   return { ok: true, value: response.text };
 }
@@ -512,6 +615,14 @@ function takeTitle(response: ResultResponse): Taken<string> {
   if (response.kind !== 'title') {
     return wrongKind('title', response.kind);
   }
+  // Deliberately not measured against `TITLE_LENGTH`, unlike the page above,
+  // and the asymmetry is recorded rather than tidied. A page of the wrong
+  // length lays out as a grid with an invisible gap, which is why that one is
+  // refused; an over-long title reaches a text node (inert) and a `fillText`
+  // clipped by `maxWidth` (`@engine/titles`), so the worst it does is look
+  // wrong on one spine. Adding the check would be right and would also change
+  // what a skewed worker does to a whole shelf, which is a decision for the
+  // milestone that makes a title failure reachable rather than for this one.
   return { ok: true, value: response.title };
 }
 

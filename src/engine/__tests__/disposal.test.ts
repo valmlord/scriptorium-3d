@@ -4,12 +4,15 @@ import {
   InstancedMesh,
   Material,
   Mesh,
+  MeshStandardMaterial,
   Object3D,
   Texture,
 } from 'three';
 import { createRoom } from '@engine/room';
+import type { RoomHandle } from '@engine/room';
 import { ResourceRegistry } from '@engine/resources';
 import type { DisposableResource } from '@engine/resources';
+import { TITLE_OFFSET_ATTRIBUTE } from '@engine/titles';
 
 /**
  * Unloading a room has to release everything that room put on the device.
@@ -126,6 +129,32 @@ function onDispose(resource: DisposableResource, listener: () => void): void {
     `A tracked resource does not announce its disposal: ${resource.constructor.name}`
   );
 }
+
+/** The spines' one material, which the title atlas patches. */
+function spineMaterialOf(room: RoomHandle): MeshStandardMaterial {
+  const { material } = room.spines;
+  if (Array.isArray(material) || !(material instanceof MeshStandardMaterial)) {
+    throw new Error('The spines do not carry a single standard material');
+  }
+  return material;
+}
+
+describe('a room nobody has read a spine of', () => {
+  it('allocates no title atlas at all', () => {
+    const room = createRoom(0n);
+
+    // `../titles.ts` builds the canvas, the texture, the instance buffer and
+    // the shader patch on the first shelf resolved, so a room with no titles
+    // is the mesh M4 built. The figures above are therefore unchanged by M6,
+    // and this is what says so.
+    expect(room.titles.shelvesHeld).toEqual([]);
+    expect(room.resources.size).toBe(EXPECTED_TOTAL);
+    expect(room.spines.geometry.getAttribute(TITLE_OFFSET_ATTRIBUTE)).toBeUndefined();
+    expect(spineMaterialOf(room).map).toBeNull();
+
+    room.dispose();
+  });
+});
 
 describe('what a room allocates', () => {
   it('registers every geometry, material and texture it creates', () => {

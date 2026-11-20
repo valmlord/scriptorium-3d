@@ -58,6 +58,7 @@ const AT_BOOK: NavigationState = {
   wall: 1,
   shelf: 2,
   volume: 3,
+  page: 0,
 };
 
 /** The face of a volume that looks into the room: the nearest thing to the camera. */
@@ -327,6 +328,13 @@ describe('the route to a navigation state', () => {
     expect(labels(AT_BOOK)).toEqual(['wall', 'shelf', 'book']);
   });
 
+  it('is the same route whichever page of the volume is open', () => {
+    // A page is a turn inside the reader and moves no camera (SPEC §6), so a
+    // turn retargets the flight at the route it is already on. If the page
+    // reached the route at all, every turn would be a flight to nowhere.
+    expect(flightRouteTo({ ...AT_BOOK, page: 409 })).toEqual(flightRouteTo(AT_BOOK));
+  });
+
   it('carries the pose of each level it passes', () => {
     const state: NavigationState = {
       level: 'book',
@@ -334,6 +342,7 @@ describe('the route to a navigation state', () => {
       wall: 2,
       shelf: 3,
       volume: 9,
+      page: 0,
     };
 
     expect(flightRouteTo(state).legs.map((leg) => leg.pose)).toEqual([

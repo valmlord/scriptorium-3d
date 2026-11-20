@@ -17,6 +17,7 @@ import {
   UnknownSymbolError,
 } from './errors';
 import { decrypt, encrypt } from './feistel';
+import { TITLE_LENGTH } from './format';
 import { fromBytesBE } from './prf';
 
 /**
@@ -25,9 +26,6 @@ import { fromBytesBE } from './prf';
  * the address linearisation (§3), the radix codec (§2) and the Feistel
  * bijection (§4) — and holds no state.
  */
-
-/** A book's title is the first 25 characters of its page 0 (SPEC §5). */
-export const TITLE_LENGTH = 25;
 
 /**
  * The divisor that discards everything of page 0 that a title does not show:

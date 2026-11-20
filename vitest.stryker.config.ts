@@ -53,11 +53,15 @@ export default defineConfig({
     // line stops meaning anything and should go.
     testTimeout: 30_000,
     // Stryker mutates `src/core` (ADR-0008), so `src/core`'s own tests are
-    // what judge the mutants. The two tests in `src/__tests__` drive the
-    // ESLint API over throwaway files written into each layer directory, which
-    // does not survive being run from Stryker's sandbox copy of the project —
-    // and a lint-configuration test could not kill a mutant in the bijection
-    // anyway. They run in `npm run test` and in CI as usual.
+    // what judge the mutants. The four files in `src/__tests__` are excluded
+    // for one reason stated twice: none of them exercises the bijection, so
+    // none can kill a mutant in it, and each reads the project's own
+    // configuration or builds it, which is what Stryker's sandbox copy does
+    // not reproduce. `layer-boundaries` drives the ESLint API over throwaway
+    // files written into each layer directory, `production-bundle` runs two
+    // Vite builds per run, `alias-agreement` reads `tsconfig.json` and
+    // `vite.aliases`, and `test-budgets` reads `vite.config` and globs the
+    // suite. They run in `npm run test` and in CI as usual.
     include: ['src/core/__tests__/**/*.test.ts'],
     // Coverage is Stryker's job here; instrumenting on top of its own
     // instrumentation only slows the run down.
