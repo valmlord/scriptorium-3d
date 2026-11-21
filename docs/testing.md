@@ -253,7 +253,8 @@ a debug hook that lies is worse than one that is absent.
 `renderer.info.programs` (`null` while the renderer has no program cache), and `isRetiring`, whether
 the viewer is keeping a replaced room for its shader programs (`src/engine/retirement.ts`). The
 counts include that room while it is kept, so a leak test compares them once `isRetiring` is `false`,
-and waits for that with `page.waitForFunction` rather than for a duration. Draw calls are not in it: `e2e/webgl-probe.ts` records them per frame,
+and waits on that condition, in the page, reading `memory().isRetiring` once per animation frame,
+and not on a duration. Draw calls are not in it: `e2e/webgl-probe.ts` records them per frame,
 below three.js.
 
 **`waitForIdle()` is composed, not owned.** It resolves when every source of pending work the

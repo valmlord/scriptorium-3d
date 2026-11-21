@@ -2926,7 +2926,14 @@ room is built or released re-takes it under the same gates.
 - The debug hook gains `memory()`: geometries, textures, the program count and `isRetiring`
   (`docs/testing.md` §7). The counts include a retiring room, so the leak test in `e2e/search.spec.ts`
   compares them after the first and the third cross-room search once `isRetiring` is `false`, and waits
-  on that condition rather than on a duration.
+  on that condition rather than on a duration. The third is the first to release a room that entered by
+  replacing a titled room, so such a room left undisposed leaks only there, and the retirement policy's
+  unit tests cannot see it because the policy gets the same calls in the second and the third. Three
+  wall-clock flights take about 15.5 s of the test on every runner. On the slow CI runner it is projected
+  at up to about 25 s, about 20 to 24 s in the central range, with about 0.8 s for each of four round
+  trips (the `page.goto` and the three searches) and up to about 1.8 s of in-page latency per search,
+  bounded from the failing CI trace (#69): above half the 30 s timeout, and recorded as the test's floor
+  rather than a defect.
 - The two-rooms test reads every frame's draw calls, and `memory().isRetiring` after the app's
   callback, from `e2e/webgl-probe.ts`'s `requestAnimationFrame` wrapper, and asserts that at least one
   frame saw a room retiring, so a precondition that stopped holding is a red test. A titled room is kept

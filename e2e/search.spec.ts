@@ -8,12 +8,13 @@ import type { PadMode } from '../src/core/library';
 import { ROOM_POSE, bookPose } from '../src/engine/poses';
 import { RIG_FIELDS } from '../src/motion/rig';
 import type { CameraPose } from '../src/motion/rig';
+import { depthOf } from '../src/state/navigation';
 import { isApplicationMessage } from './console';
 import { hookLevel, hookRig, waitForIdle } from './debug-hook';
 import type { HookRig } from './debug-hook';
-import { clickFirstVolume } from './spines';
+import { clickFirstVolume, clickFirstVolumeInPage } from './spines';
 import { installWebGLProbe } from './webgl-probe';
-import type { ProbeReport, TextureUpload } from './webgl-probe';
+import type { FrameDrawCalls, TextureUpload } from './webgl-probe';
 
 /**
  * M7's end-to-end scenarios: a phrase typed into the panel is flown to, in
@@ -29,7 +30,8 @@ import type { ProbeReport, TextureUpload } from './webgl-probe';
  *
  * **Nothing waits on a duration.** Every step waits on `waitForIdle()`, which
  * from M7 also waits for the search session to have acted on its reply
- * (`src/main.ts`), or on a condition through `page.waitForFunction`.
+ * (`src/main.ts`), or on a condition: polled inside the page once per animation
+ * frame, or held by a retrying assertion such as `toHaveText`.
  *
  * **Every scenario runs under the clean-console assertion**, as a fixture
  * rather than repeated in each test: an unhandled rejection from a superseded
@@ -52,6 +54,12 @@ const PANEL = '#search';
 const READER = '#reader';
 const READER_PAGE = '#reader .reader-page';
 const READER_MARK = '#reader .reader-mark';
+
+/** The key that goes up a level (`src/app/controls.ts`). */
+const BACK_KEY = 'Escape';
+
+/** From a book up to the room: shelf, wall, room (`src/state/navigation.ts`). */
+const LEVELS_ABOVE_BOOK = depthOf('book');
 
 /** The label of the spaces radio, which is how a person finds it. */
 const SPACES_LABEL = 'Spaces';
@@ -194,21 +202,25 @@ async function settled(page: Page): Promise<Settled> {
   );
   return {
     ...shown,
-    address:
-      shown.address === null
-        ? null
-        : { ...shown.address, room: BigInt(shown.address.room) },
+    address: fromPageAddress(shown.address),
     offset: shown.offset === null ? null : Number(shown.offset),
   };
 }
 
+/** An address as it crosses the page boundary, its room a decimal string. */
+type PageAddress = Omit<Address, 'room'> & { room: string };
+
+function fromPageAddress(shown: PageAddress | null): Address | null {
+  return shown === null ? null : { ...shown, room: BigInt(shown.room) };
+}
+
 /** The address a settled search reached; fails the test if there is none. */
-function reachedAddress(result: Settled): Address {
-  expect(result.address).not.toBeNull();
-  if (result.address === null) {
+function reachedAddress(address: Address | null): Address {
+  expect(address).not.toBeNull();
+  if (address === null) {
     throw new Error('the search reached no book');
   }
-  return result.address;
+  return address;
 }
 
 /** The offset the panel reported; fails the test if it reported none. */
@@ -238,20 +250,118 @@ function bookPoseOf(address: Address): CameraPose {
   return bookPose(address.wall, address.shelf, address.volume);
 }
 
-/** What `memory()` reports now, and where the machine is. */
-async function memoryAt(page: Page): Promise<{ memory: Memory; room: string | null }> {
-  return page.evaluate(() => {
-    const hook = window.__scriptorium;
-    if (hook === undefined) {
-      throw new Error('window.__scriptorium is not installed in this build');
-    }
-    return { memory: hook.memory(), room: hook.address()?.room.toString() ?? null };
-  });
+/** What a search leaves on the device once its replaced room is released. */
+interface Retired {
+  memory: Memory;
+  /** The room of the book the machine is at, as a decimal string, or `null` above a book. */
+  room: string | null;
+  level: string;
 }
 
-/** Wait until no replaced room is being kept, which is when `memory()` counts one room. */
-async function waitForRetirement(page: Page): Promise<void> {
-  await page.waitForFunction(() => window.__scriptorium?.memory().isRetiring === false);
+/**
+ * Wait for idle, submit `input` in the page, wait for idle again and then for
+ * the replaced room to be released, and read `memory()`, the room and the
+ * level, all in one round trip.
+ *
+ * One `page.evaluate` because at software GL every round trip waits on the
+ * render loop, and on the slow CI runner each costs about 0.8 s (#69). The
+ * wait before the submit is what lets the first search follow `page.goto`
+ * directly, with no round trip of its own for the opening idle. The submit
+ * skips the typing, which `typing a phrase flies to a book that holds it at
+ * the stated offset` covers.
+ */
+async function searchUntilRetired(page: Page, input: string): Promise<Retired> {
+  return page.evaluate(
+    async (inputs: { selector: string; input: string }) => {
+      const hook = window.__scriptorium;
+      const field = document.querySelector(inputs.selector);
+      if (
+        hook === undefined ||
+        !(field instanceof HTMLTextAreaElement) ||
+        field.form === null
+      ) {
+        throw new Error('the panel or the debug hook is missing');
+      }
+      await hook.waitForIdle();
+      field.value = inputs.input;
+      field.form.requestSubmit();
+      await hook.waitForIdle();
+      // A condition and not a duration: the replaced room is released by a
+      // render, and only then do the counts describe one room.
+      while (hook.memory().isRetiring) {
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => {
+            resolve();
+          });
+        });
+      }
+      return {
+        memory: hook.memory(),
+        room: hook.address()?.room.toString() ?? null,
+        level: hook.state().level,
+      };
+    },
+    { selector: QUERY, input }
+  );
+}
+
+/**
+ * How long each probe's record was before a search. A probe with no mark
+ * carries nothing back, so a test pays only for the records it reads.
+ */
+interface ProbeMarks {
+  frames?: number;
+  titles?: number;
+  uploads?: number;
+}
+
+/** Where a search ended, and what each marked probe recorded from its mark on. */
+interface Searched {
+  address: Address | null;
+  frames: FrameDrawCalls[];
+  drawn: string[];
+  uploads: TextureUpload[];
+}
+
+/**
+ * Submit `input` in the page and wait for idle, in one round trip, for the
+ * reason `searchUntilRetired` gives. The records are sliced in the page
+ * rather than carried across whole.
+ */
+async function searchInPage(
+  page: Page,
+  input: string,
+  since: ProbeMarks
+): Promise<Searched> {
+  const searched = await page.evaluate(
+    async (inputs: { selector: string; input: string; since: ProbeMarks }) => {
+      const hook = window.__scriptorium;
+      const probe = window.__webglProbe;
+      const field = document.querySelector(inputs.selector);
+      if (
+        hook === undefined ||
+        probe === undefined ||
+        !(field instanceof HTMLTextAreaElement) ||
+        field.form === null
+      ) {
+        throw new Error('the panel, the debug hook or the WebGL probe is missing');
+      }
+      field.value = inputs.input;
+      field.form.requestSubmit();
+      await hook.waitForIdle();
+      const address = hook.address();
+      const { frames, titles, uploads } = inputs.since;
+      return {
+        address:
+          address === null ? null : { ...address, room: address.room.toString() },
+        frames: frames === undefined ? [] : probe.frames.slice(frames),
+        drawn: titles === undefined ? [] : (window.__drawnTitles ?? []).slice(titles),
+        uploads: uploads === undefined ? [] : probe.uploads.slice(uploads),
+      };
+    },
+    { selector: QUERY, input, since }
+  );
+  return { ...searched, address: fromPageAddress(searched.address) };
 }
 
 /**
@@ -321,14 +431,6 @@ function atlasUploadsIn(uploads: readonly TextureUpload[]): number {
   ).length;
 }
 
-async function probeReport(page: Page): Promise<ProbeReport> {
-  const report = await page.evaluate(() => window.__webglProbe);
-  if (report === undefined) {
-    throw new Error('The WebGL probe was not installed before the page loaded');
-  }
-  return report;
-}
-
 for (const mode of ['random', 'spaces'] as const) {
   test(`typing a phrase flies to a book that holds it at the stated offset (${mode})`, async ({
     page,
@@ -339,7 +441,7 @@ for (const mode of ['random', 'spaces'] as const) {
     await waitForIdle(page);
 
     const result = await settled(page);
-    const address = reachedAddress(result);
+    const address = reachedAddress(result.address);
     const offset = reportedOffset(result);
     expect(address.room).not.toBe(0n);
     expect(result.level).toBe('book');
@@ -363,26 +465,52 @@ for (const mode of ['random', 'spaces'] as const) {
 
 test('a cross-room flight never draws two rooms', async ({ page }) => {
   await installWebGLProbe(page);
-  await openLibrary(page);
+  // The opening wait for idle is folded into the click's round trip.
+  await page.goto('/');
   // A shelf first, so the opening room has rendered with titles and is kept
   // from the swap until the new room's first titled render. An untitled room
   // is gone by the end of the swap frame, which would leave this scenario
   // nothing to catch.
-  await clickFirstVolume(page);
-  await waitForIdle(page);
-  await page.keyboard.press('Escape');
-  await page.keyboard.press('Escape');
-  await page.keyboard.press('Escape');
-  await waitForIdle(page);
-  expect(await hookLevel(page)).toBe('room');
-  const framesBefore = (await probeReport(page)).frames.length;
+  await clickFirstVolumeInPage(page);
+  // Each step below is one round trip, for the reason `searchUntilRetired`
+  // gives, and the probe's frames are sliced in the page rather than carried
+  // across whole.
+  const atRoom = await page.evaluate(
+    async (back: { key: string; presses: number }) => {
+      const hook = window.__scriptorium;
+      if (hook === undefined) {
+        throw new Error('window.__scriptorium is not installed in this build');
+      }
+      const probe = window.__webglProbe;
+      if (probe === undefined) {
+        throw new Error('The WebGL probe was not installed before the page loaded');
+      }
+      // At the book first, so the shelf's titles are drawn before the way back.
+      await hook.waitForIdle();
+      // Dispatched where `keyboard.press` would deliver the key, at the focused
+      // element, from which it bubbles to the `window` listener of
+      // `src/app/controls.ts`; that listener reads only `key` and `target`.
+      for (let press = 0; press < back.presses; press += 1) {
+        (document.activeElement ?? document.body).dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: back.key,
+            bubbles: true,
+            cancelable: true,
+          })
+        );
+      }
+      await hook.waitForIdle();
+      return { level: hook.state().level, frames: probe.frames.length };
+    },
+    { key: BACK_KEY, presses: LEVELS_ABOVE_BOOK }
+  );
+  expect(atRoom.level).toBe('room');
 
-  await search(page, PHRASE);
-  await waitForIdle(page);
+  const { address, frames } = await searchInPage(page, PHRASE, {
+    frames: atRoom.frames,
+  });
 
-  const result = await settled(page);
-  expect(reachedAddress(result).room).not.toBe(0n);
-  const frames = (await probeReport(page)).frames.slice(framesBefore);
+  expect(reachedAddress(address).room).not.toBe(0n);
   expect(frames.length).toBeGreaterThan(0);
   const overBudget = frames
     .map((frame) => frame.instanced.length + frame.plain)
@@ -517,7 +645,7 @@ test('with reduced motion the flight is a cut', async ({ page }) => {
   await openLibrary(page);
   await clickFirstVolume(page);
   await waitForIdle(page);
-  const start = reachedAddress(await settled(page));
+  const start = reachedAddress((await settled(page)).address);
   await page.evaluate(() => {
     const hook = window.__scriptorium;
     if (hook === undefined) {
@@ -535,7 +663,7 @@ test('with reduced motion the flight is a cut', async ({ page }) => {
   await search(page, PHRASE);
   await waitForIdle(page);
 
-  const reached = reachedAddress(await settled(page));
+  const reached = reachedAddress((await settled(page)).address);
   expect(reached.room).not.toBe(start.room);
   const samples = await page.evaluate(() => window.__rigSamples ?? []);
   expect(samples.length).toBeGreaterThan(0);
@@ -589,7 +717,7 @@ test('a search during a flight retargets it', async ({ page }) => {
 
   expect(during.isFlying).toBe(true);
   const result = await settled(page);
-  const address = reachedAddress(result);
+  const address = reachedAddress(result.address);
   expect(address.room.toString()).not.toBe(during.firstRoom);
   expect(result.level).toBe('book');
   expect(result.text).toBe(getPage(address));
@@ -636,7 +764,7 @@ test('two searches in one task end at the second', async ({ page }) => {
   await waitForIdle(page);
 
   const result = await settled(page);
-  const address = reachedAddress(result);
+  const address = reachedAddress(result.address);
   expect(result.text).toBe(getPage(address));
   expect(
     slice(result.text, reportedOffset(result), Array.from(OTHER_PHRASE).length)
@@ -651,18 +779,33 @@ test('two searches in one task end at the second', async ({ page }) => {
 });
 
 test('a cross-room search leaks no geometry, texture or program', async ({ page }) => {
-  await openLibrary(page);
+  // The opening wait for idle is folded into the first search's round trip.
+  await page.goto('/');
   const settledMemory: Memory[] = [];
   const rooms: (string | null)[] = ['0'];
 
+  // The third count is compared with the first, both read at a book with
+  // nothing retiring. The first is past warm-up: it replaced the opening
+  // room, which never drew titles, and left the titled program linked. The
+  // second would not do, because the outgoing rooms differ: search 2
+  // releases room A, entered from the room level and titled by its own
+  // reply, and search 3 releases room B, entered from a book while a titled
+  // room was kept and titled by the swap's `titles.refresh()`. So a room that
+  // entered by replacing a titled room and is never disposed leaks only on
+  // the third. The retirement policy gets the same calls in both, so a unit
+  // test of the policy cannot see it.
+  //
+  // The flights' share is three wall-clock flights, about 3.1 + 6.2 + 6.2 =
+  // 15.5 s: GSAP flights run on the render loop's timestamp, the same on
+  // every runner. On the slow CI runner the projection is up to about 25 s,
+  // about 20 to 24 s in the central range: the flights, about 0.8 s for each
+  // of four round trips (the goto and the three searches), measured from the
+  // failing CI trace, and up to about 1.8 s of in-page latency per search,
+  // bounded from the same trace (#69). That is above half the 30 s timeout,
+  // and it is the recorded floor, not a defect.
   for (let round = 0; round < 3; round += 1) {
-    await search(page, PHRASE);
-    await waitForIdle(page);
-    // A condition and not a duration: the replaced room is released by a
-    // render, and only then do the counts describe one room.
-    await waitForRetirement(page);
-    const { memory, room } = await memoryAt(page);
-    expect(await hookLevel(page)).toBe('book');
+    const { memory, room, level } = await searchUntilRetired(page, PHRASE);
+    expect(level).toBe('book');
     settledMemory.push(memory);
     rooms.push(room);
   }
@@ -680,33 +823,43 @@ test('a cross-room search leaks no geometry, texture or program', async ({ page 
 test("the new room's spines carry their own titles", async ({ page }) => {
   await installTitleProbe(page);
   await installWebGLProbe(page);
-  await openLibrary(page);
+  // The opening wait for idle is folded into the click's round trip.
+  await page.goto('/');
   // From a book, so the old room has a shelf of its own titles and the new
   // shelf's reply arrives during the retreat, while the old room is still on
   // screen: it is not written there, and the swap's `titles.refresh()` is
   // what draws it. From the room level the swap comes first and the reply
   // draws itself, so that path would go untested. Everything drawn from here
   // on is drawn for the room the search reaches.
-  await clickFirstVolume(page);
-  await waitForIdle(page);
-  const before = await page.evaluate(() => ({
-    titles: window.__drawnTitles?.length ?? 0,
-    uploads: window.__webglProbe?.uploads.length ?? 0,
-  }));
+  await clickFirstVolumeInPage(page);
+  // One round trip each, for the reason `searchUntilRetired` gives.
+  const before = await page.evaluate(async () => {
+    const hook = window.__scriptorium;
+    if (hook === undefined) {
+      throw new Error('window.__scriptorium is not installed in this build');
+    }
+    await hook.waitForIdle();
+    return {
+      level: hook.state().level,
+      titles: window.__drawnTitles?.length ?? 0,
+      uploads: window.__webglProbe?.uploads.length ?? 0,
+    };
+  });
+  // A click that missed would leave the search to start from the room level,
+  // the path the comment above rules out, and the test would pass without
+  // the swap's `titles.refresh()`.
+  expect(before.level).toBe('book');
 
-  await search(page, PHRASE);
-  await waitForIdle(page);
+  const searched = await searchInPage(page, PHRASE, {
+    titles: before.titles,
+    uploads: before.uploads,
+  });
 
-  const address = reachedAddress(await settled(page));
-  const drawn = await page.evaluate(
-    (from: number) => (window.__drawnTitles ?? []).slice(from),
-    before.titles
-  );
-  const report = await probeReport(page);
+  const address = reachedAddress(searched.address);
   const expected = Array.from({ length: BOOKS_PER_SHELF }, (_, volume) =>
     getTitle({ room: address.room, wall: address.wall, shelf: address.shelf, volume })
   );
-  expect(new Set(drawn)).toEqual(new Set(expected));
+  expect(new Set(searched.drawn)).toEqual(new Set(expected));
   // And they reached the GPU, in the new room's own atlas.
-  expect(atlasUploadsIn(report.uploads.slice(before.uploads))).toBeGreaterThan(0);
+  expect(atlasUploadsIn(searched.uploads)).toBeGreaterThan(0);
 });
