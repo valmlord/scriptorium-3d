@@ -86,9 +86,9 @@ export default defineConfig({
       // it is where the projections live, so M6 put the title resolver and the
       // composition of `waitForIdle()` there, which is the most
       // order-dependent code in the repository. Its floor is 80 rather than
-      // 90 because `controls.ts` installs DOM pointer handlers and is reached
-      // only from Playwright, so it sits at 0 here and the layer still
-      // aggregates to 87.
+      // 90 because `controls.ts` installs DOM pointer handlers that only
+      // Playwright reaches; its one DOM-free predicate, `isEditableTarget`, is
+      // unit-tested, and the rest of the file stays below the line here.
       thresholds: {
         'src/core/**': { lines: 100, branches: 100, functions: 100, statements: 100 },
         'src/worker/**': { lines: 90, branches: 90, functions: 90, statements: 90 },
