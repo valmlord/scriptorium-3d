@@ -1,7 +1,10 @@
-import { roomToName } from '@core/address';
 import { createViewer } from '@engine/viewer';
 import { GenerationClient, createGenerationWorker } from '@worker/client';
+import { createHighlight } from '@ui/highlight';
 import { createReader } from '@ui/reader';
+import { describeRoom } from '@ui/room-name';
+import { createSearchPanel } from '@ui/search';
+import { createSearchSession } from '@ui/search-session';
 import { createChoreography } from '@app/choreography';
 import { installControls } from '@app/controls';
 import { installDebugHook } from '@app/debug';
@@ -14,7 +17,7 @@ import { createTitleResolver } from '@app/titles';
  * the layers up.
  *
  * The order is viewer, first room, choreography, reader, title resolver,
- * controls, loop, and it matters in five places:
+ * search panel, controls, loop, and it matters in five places:
  *
  * - **The viewer and its first room come before the choreography**, because
  *   the choreography's `shownRoom` is `shownRoomOf(viewer)`, evaluated as an
@@ -28,7 +31,9 @@ import { createTitleResolver } from '@app/titles';
  *   needs something to pick from.
  * - **The reader and the title resolver are given the one generation client**
  *   rather than one each, so a title drawn on a spine and the page behind it
- *   come out of the same cache.
+ *   come out of the same cache. The search session sends its searches through
+ *   it too, and shares one highlight with the reader, which marks the phrase
+ *   the session's last hit placed.
  * - **The reader is built before the title resolver**, so that it subscribes
  *   to the machine first. Both react to the same event and the worker answers
  *   in the order it was asked, so that subscription order is what puts the
@@ -57,7 +62,10 @@ import { createTitleResolver } from '@app/titles';
  * be busy from M6: the camera flight, the worker client's request table, and
  * the reader catching up with the machine. The title resolver is a fourth,
  * and it is in the list because the titles of a shelf are generated work a
- * test has every reason to wait for. `@app/idle` joins them; nothing here
+ * test has every reason to wait for. The search session is a fifth: the
+ * client is quiet the moment a hit arrives, and the session acts on it a
+ * microtask later, so a test waiting on the client alone would read the
+ * machine before the hit had moved it. `@app/idle` joins them; nothing here
  * holds a second opinion about what idle means.
  */
 
@@ -90,11 +98,13 @@ const choreography = createChoreography(FIRST_ROOM, {
   prefersReducedMotion: () => reducedMotion.matches,
 });
 const client = new GenerationClient(createGenerationWorker());
+const highlight = createHighlight();
 
 const reader = createReader({
   container: document.body,
   navigation: choreography.navigation,
   source: client,
+  highlight,
 });
 const titles = createTitleResolver({
   navigation: choreography.navigation,
@@ -129,25 +139,12 @@ const titles = createTitleResolver({
   },
 });
 
-/**
- * How much of a room's name a console line carries.
- *
- * A name is base-36 and the last room's is 3197 characters long
- * (`@core/address`; 4975 is the same index in decimal, which is the figure
- * that gets quoted and is not the one that matters here), so the whole name is
- * not a thing to put in a console line: it would bury the rest of the message
- * and the characters past the first few identify nothing a person can act on.
- * The length is reported alongside, which is what makes two truncated names
- * distinguishable.
- */
-const REPORTED_ROOM_NAME_CHARACTERS = 12;
-
-function describeRoom(room: bigint): string {
-  const name = roomToName(room);
-  return name.length <= REPORTED_ROOM_NAME_CHARACTERS
-    ? name
-    : `${name.slice(0, REPORTED_ROOM_NAME_CHARACTERS)} (${String(name.length)} characters)`;
-}
+const search = createSearchSession({
+  navigation: choreography.navigation,
+  source: client,
+  highlight,
+});
+createSearchPanel({ container: document.body, session: search });
 
 installControls(canvas, viewer, choreography);
 viewer.start();
@@ -185,6 +182,7 @@ if (import.meta.env.MODE !== 'production') {
         choreography,
         reader,
         titles,
+        search,
         {
           isIdle: () => client.isQuiet,
           whenIdle: () => client.whenQuiet(),

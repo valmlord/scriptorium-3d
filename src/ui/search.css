@@ -1,0 +1,110 @@
+/*
+ * The search panel's styles, beside the module that builds its DOM.
+ *
+ * Nothing here hides an element. The two result regions stay in the layout
+ * even when empty, because a live region that appears only when it has
+ * something to say is announced unreliably: it has to exist before its text
+ * changes. Anything hidden later needs `.x[hidden] { display: none }`, since a
+ * class that sets `display` outranks the user agent's own rule for `[hidden]`
+ * (`./reader.css` says what that cost the reader).
+ */
+
+.search {
+  position: fixed;
+  top: 1rem;
+  left: 1rem;
+  /* Above the reader's layer, which covers the viewport with
+     `pointer-events: none` and must not take the panel's clicks. */
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: min(22rem, calc(100vw - 2rem));
+  padding: 0.75rem 1rem 1rem;
+  border: 1px solid #4a4134;
+  border-radius: 0.25rem;
+  background-color: #17140f;
+  box-shadow: 0 1rem 2rem rgb(0 0 0 / 45%);
+  color: #ece4d0;
+  font-size: 0.8125rem;
+}
+
+.search-label {
+  color: #bdb49f;
+}
+
+.search-query {
+  box-sizing: border-box;
+  width: 100%;
+  resize: vertical;
+  border: 1px solid #5c5241;
+  border-radius: 0.1875rem;
+  padding: 0.375rem 0.5rem;
+  background-color: #0f0d0a;
+  color: #f0e9d6;
+  font-family: var(--reader-font);
+  font-size: 0.875rem;
+}
+
+.search-query[aria-invalid='true'] {
+  border-color: #e0806a;
+}
+
+.search-modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  margin: 0;
+  border: 1px solid #3a332a;
+  border-radius: 0.1875rem;
+  padding: 0.375rem 0.625rem 0.5rem;
+}
+
+.search-modes legend {
+  padding: 0 0.25rem;
+  color: #bdb49f;
+}
+
+.search-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  cursor: pointer;
+}
+
+.search-submit {
+  align-self: flex-start;
+  border: 1px solid #5c5241;
+  border-radius: 0.1875rem;
+  padding: 0.3125rem 0.75rem;
+  background-color: #2b251c;
+  color: #ece4d0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.search-submit:hover {
+  background-color: #3a3326;
+}
+
+.search-query:focus-visible,
+.search-submit:focus-visible,
+.search-mode input:focus-visible {
+  outline: 2px solid #d8c89a;
+  outline-offset: 2px;
+}
+
+.search-status,
+.search-refusal {
+  margin: 0;
+  /* A refused name can be long, and `U+XXXX` lists do not hyphenate. */
+  overflow-wrap: anywhere;
+}
+
+.search-status {
+  color: #bdb49f;
+}
+
+.search-refusal {
+  color: #f0a898;
+}

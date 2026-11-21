@@ -132,3 +132,13 @@
   font-variant-ligatures: none;
   tab-size: 1;
 }
+
+/*
+ * The phrase a search found. Colour only: a padding, a border or a change of
+ * weight would widen the marked characters, and the grid is 40 columns only
+ * while every glyph keeps the same advance.
+ */
+.reader-mark {
+  background-color: #d8c89a;
+  color: #17140f;
+}
