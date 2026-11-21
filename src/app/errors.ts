@@ -1,9 +1,12 @@
 /**
- * Dedicated error types for the ways a shareable URL can be wrong (SPEC §7).
+ * Dedicated error types for the `app` layer: the ways a shareable URL can be
+ * wrong, the debug hook asked for a measurement it does not take, and the room
+ * on screen read while there is none.
  *
- * A page in this library is computed from its address, not stored, so a
- * fragment parsed slightly wrong does not fail — it silently yields a
- * different book that looks exactly as plausible as the right one. Every
+ * **The URL errors** (SPEC §7) are most of this file. A page in this library
+ * is computed from its address, not stored, so a fragment parsed slightly
+ * wrong does not fail — it silently yields a different book that looks
+ * exactly as plausible as the right one. Every
  * refusal below therefore carries the offending value and what was expected of
  * it, in the pattern of `src/core/errors.ts`: a bare `Error('invalid URL')` is
  * useless during an incident and useless in a bug report.
@@ -211,5 +214,24 @@ export class FrameTimingsUnavailableError extends Error {
       'Frame timings are not collected yet: the rolling frame budget arrives with M10 (roadmap M10), and this hook reports nothing rather than reporting zeros'
     );
     this.name = 'FrameTimingsUnavailableError';
+  }
+}
+
+/**
+ * The room on screen was read while the viewer holds no room: before its first
+ * `loadRoom`, or after it was disposed.
+ *
+ * Thrown by the getter `./shown-room.ts` builds, rather than answered with a
+ * default room. The viewer is the single holder of the room on screen, and a
+ * fallback constant would be a second opinion about it, right only while the
+ * library happens to open at that room and wrong the day it opens at the room
+ * a URL names.
+ */
+export class NoRoomLoadedError extends Error {
+  constructor() {
+    super(
+      'The room on screen was read while the viewer holds no room (before its first loadRoom, or after dispose): there is no default room to answer with'
+    );
+    this.name = 'NoRoomLoadedError';
   }
 }

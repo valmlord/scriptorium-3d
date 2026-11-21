@@ -46,30 +46,6 @@ export class IllegalTransitionError extends Error {
 }
 
 /**
- * A route was asked for between two rooms.
- *
- * The machine's room is fixed for its lifetime: moving between rooms is a cut
- * rather than a flight, and it arrives with the corridors of M9 and the deep
- * links of M8. Until then this is refused by name, because resolving it in the
- * room the user is already in would send them to a plausible wrong volume —
- * the quiet class of wrong this project is built to refuse.
- */
-export class RoomChangeUnsupportedError extends Error {
-  readonly from: bigint;
-  readonly to: bigint;
-
-  constructor(from: bigint, to: bigint) {
-    super(
-      `No navigation route from room ${from.toString(36)} to room ${to.toString(36)}: ` +
-        'the navigation machine holds one room for its lifetime, and changing rooms arrives with M8 and M9'
-    );
-    this.name = 'RoomChangeUnsupportedError';
-    this.from = from;
-    this.to = to;
-  }
-}
-
-/**
  * An address component arrived as something other than an integer.
  *
  * `core`'s `assertValidAddress` checks the range of each component and not its

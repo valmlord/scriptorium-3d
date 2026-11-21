@@ -47,6 +47,8 @@ function firstSlotOf(shelf: ShelfAddress): number {
 /** A request in flight, as the test can drive it. */
 interface Scripted {
   readonly shelf: ShelfAddress;
+  /** Answered from the cache, so no worker was asked. */
+  readonly fromCache: boolean;
   cancelled: boolean;
   resolve(titles: readonly string[]): void;
   reject(error: unknown): void;
@@ -67,6 +69,7 @@ class ScriptedShelves implements ShelfTitleSource {
     if (this.cached.has(keyOf(shelf))) {
       const scripted: Scripted = {
         shelf,
+        fromCache: true,
         cancelled: false,
         resolve: () => undefined,
         reject: () => undefined,
@@ -89,6 +92,7 @@ class ScriptedShelves implements ShelfTitleSource {
     });
     const scripted: Scripted = {
       shelf,
+      fromCache: false,
       cancelled: false,
       resolve: settle,
       reject: fail,
@@ -530,6 +534,66 @@ describe('where the titles are written', () => {
     await Promise.resolve();
 
     expect(elsewhere.written).toEqual([]);
+  });
+});
+
+describe('a room swapped onto the screen', () => {
+  const NEXT_ROOM = 37n;
+  const NEXT_SHELF: ShelfAddress = { ...SHELF, room: NEXT_ROOM };
+
+  /**
+   * A resolver whose destination is changed by the test, as a swap changes
+   * the viewer's room. The machine has already moved to `NEXT_SHELF`, so its
+   * request went out while the old room was on screen.
+   */
+  function movedBeforeTheSwap(): {
+    source: ScriptedShelves;
+    screen: { room: RoomTitles | null };
+    nextRoom: RecordingRoom;
+    resolver: ReturnType<typeof createTitleResolver>;
+  } {
+    const navigation = createNavigation(ROOM);
+    const source = new ScriptedShelves();
+    const screen: { room: RoomTitles | null } = { room: new RecordingRoom(ROOM) };
+    const resolver = createTitleResolver({
+      navigation,
+      source,
+      destination: screen,
+      onFailure: failLoudly,
+    });
+    goTo(navigation, NEXT_SHELF);
+    return { source, screen, nextRoom: new RecordingRoom(NEXT_ROOM), resolver };
+  }
+
+  it('refresh after a swap draws the new room’s shelf from the cache without a worker request', async () => {
+    const { source, screen, nextRoom, resolver } = movedBeforeTheSwap();
+    source.forShelf(NEXT_SHELF).resolve(titlesOf(NEXT_SHELF));
+    await resolver.whenIdle();
+    // The reply landed while the old room was loaded, so it was written
+    // nowhere; the client kept it, as its cache keeps every reply.
+    source.cache(NEXT_SHELF);
+
+    screen.room = nextRoom;
+    resolver.refresh();
+    await Promise.resolve();
+
+    expect(nextRoom.written).toEqual([
+      { firstSlot: firstSlotOf(NEXT_SHELF), titles: titlesOf(NEXT_SHELF) },
+    ]);
+    expect(source.issued.map((request) => request.fromCache)).toEqual([false, true]);
+  });
+
+  it('a shelf reply that arrives after the swap is drawn without a refresh', async () => {
+    const { source, screen, nextRoom, resolver } = movedBeforeTheSwap();
+
+    screen.room = nextRoom;
+    source.forShelf(NEXT_SHELF).resolve(titlesOf(NEXT_SHELF));
+    await resolver.whenIdle();
+
+    expect(nextRoom.written).toEqual([
+      { firstSlot: firstSlotOf(NEXT_SHELF), titles: titlesOf(NEXT_SHELF) },
+    ]);
+    expect(source.issued).toHaveLength(1);
   });
 });
 

@@ -52,9 +52,11 @@ not reach `toLinear` on a five-field address or a constant naming how many volum
 The import rules are enforced in the ESLint config. **All seven layer directories have a block there, and
 so does the composition root** — a layer with no block is a boundary that reads as enforced and is not,
 which is what ADR-0029 found in `state`, in `app` and in `src/main.ts`. `src/__tests__/` has no block on
-purpose: those four files are the suite's own meta-tests and belong to no layer. One of them imports
-`@core/prf` to name `DOMAIN_TAG`, because what it asserts is which thread that surface is shipped on
-(ADR-0032). The lint rules are the
+purpose: it holds the checks and helpers about the repository as a whole, which belong to no layer. The
+production-bundle test imports `@core/prf` to name `DOMAIN_TAG`, because what it asserts is which thread
+that surface is shipped on (ADR-0032). A layer's tests may import a helper from there by relative path, and
+a helper there imports nothing but Node built-ins, so the directory never relays a layer import around a
+lint block; that is this paragraph's rule, and no lint block enforces it. The lint rules are the
 specification; the table above is their explanation.
 
 `no-restricted-imports` matches the static import forms of every row. **`core`'s split alone has a second

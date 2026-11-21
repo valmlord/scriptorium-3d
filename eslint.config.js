@@ -22,10 +22,14 @@ import eslintConfigPrettier from 'eslint-config-prettier';
  * boundary with both rules behind it, because it is the one whose breach costs
  * a frame.
  *
- * `src/__tests__/` deliberately has none. The four files there are the suite's
- * own meta-tests — they read this config, the aliases, the budgets and the
- * built bundles — and holding them to a layer's rule would be holding them to a
- * layer they are not in. The bundle test imports `@core/prf` for `DOMAIN_TAG`,
+ * `src/__tests__/` deliberately has none. It holds the checks and helpers
+ * about the repository as a whole — what this config, the aliases, the budgets,
+ * the built bundles and the source tree say — and holding them to a layer's
+ * rule would be holding them to a layer they are not in. A layer's tests may
+ * import a helper from there by relative path; a helper there imports nothing
+ * but Node built-ins, so it relays no layer import around the block of the
+ * layer that uses it. Nothing below enforces that: `docs/architecture.md` §1
+ * states it. The bundle test imports `@core/prf` for `DOMAIN_TAG`,
  * which is the generation surface, and that is the exemption doing its job
  * rather than a hole in it: it asserts where that surface ends up, so it has to
  * be able to name it (ADR-0032).

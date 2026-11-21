@@ -6,22 +6,40 @@ import { createChoreography } from '@app/choreography';
 import { installControls } from '@app/controls';
 import { installDebugHook } from '@app/debug';
 import { whenAllIdle } from '@app/idle';
+import { shownRoomOf } from '@app/shown-room';
 import { createTitleResolver } from '@app/titles';
 
 /**
  * Entry point: mount the canvas, open the library at its first room, and join
  * the layers up.
  *
- * The order matters in four places. The choreography is built before the
- * viewer because the viewer asks for a rig on every frame it draws; the room
- * is loaded before the controls are installed because a pick needs something
- * to pick from; the reader and the title resolver are given the one generation
- * client rather than one each, so a title drawn on a spine and the page behind
- * it come out of the same cache; and the reader is built before the title
- * resolver, so that it subscribes to the machine first. Both react to the same
- * event and the worker answers in the order it was asked, so that subscription
- * order is what puts the page somebody is waiting to read ahead of 32 titles
- * for spines the camera is still flying towards.
+ * The order is viewer, first room, choreography, reader, title resolver,
+ * controls, loop, and it matters in five places:
+ *
+ * - **The viewer and its first room come before the choreography**, because
+ *   the choreography's `shownRoom` is `shownRoomOf(viewer)`, evaluated as an
+ *   argument, and the viewer is the one holder of the room on screen. The
+ *   viewer's `frame` closure reads the choreography lazily, and nothing calls
+ *   it before `viewer.start()`.
+ * - **`showRoom` may refer to the viewer and the title resolver** although the
+ *   resolver is built after it: it runs only from a swap inside `frame()`,
+ *   which needs the loop started, so both exist by then.
+ * - **The room is loaded before the controls are installed**, because a pick
+ *   needs something to pick from.
+ * - **The reader and the title resolver are given the one generation client**
+ *   rather than one each, so a title drawn on a spine and the page behind it
+ *   come out of the same cache.
+ * - **The reader is built before the title resolver**, so that it subscribes
+ *   to the machine first. Both react to the same event and the worker answers
+ *   in the order it was asked, so that subscription order is what puts the
+ *   page somebody is waiting to read ahead of 32 titles for spines the camera
+ *   is still flying towards.
+ *
+ * **After startup, `viewer.loadRoom` is called by the swap alone**, through
+ * the `showRoom` below. A second caller would skip `titles.refresh()`, leaving
+ * the shelf being read blank, and would put a room on screen that the machine
+ * does not name. `src/app/__tests__/room-loading.test.ts` counts the calls in
+ * `src/` and allows exactly these two.
  *
  * `frame` is the single point where time enters the application: the one
  * `setAnimationLoop` hands its timestamp here, the choreography advances gsap's
@@ -51,13 +69,22 @@ if (!(canvas instanceof HTMLCanvasElement)) {
   throw new Error('Canvas element not found');
 }
 
-const choreography = createChoreography(FIRST_ROOM);
-const client = new GenerationClient(createGenerationWorker());
 const viewer = createViewer(canvas, {
   frame: (seconds) => choreography.frame(seconds),
 });
 
 viewer.loadRoom(FIRST_ROOM);
+
+const choreography = createChoreography(FIRST_ROOM, {
+  shownRoom: shownRoomOf(viewer),
+  showRoom: (room) => {
+    viewer.loadRoom(room);
+    // The machine moved before the swap, so the shelf it is at in this room
+    // was asked for while the last room was on screen.
+    titles.refresh();
+  },
+});
+const client = new GenerationClient(createGenerationWorker());
 
 const reader = createReader({
   container: document.body,

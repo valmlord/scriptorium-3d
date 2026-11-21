@@ -26,7 +26,15 @@ function installedHook(): {
   target: DebugHookTarget;
   choreography: Choreography;
 } {
-  const choreography = createChoreography(ROOM);
+  // A screen that shows whatever it was last asked to, standing in for the
+  // viewer; nothing here changes rooms, so it only ever shows `ROOM`.
+  let shown = ROOM;
+  const choreography = createChoreography(ROOM, {
+    shownRoom: () => shown,
+    showRoom: (room) => {
+      shown = room;
+    },
+  });
   const target: DebugHookTarget = {};
   installDebugHook(target, {
     state: () => choreography.state,

@@ -104,6 +104,17 @@ export interface TitleResolver {
   isIdle(): boolean;
   /** Resolves the next time nothing is. */
   whenIdle(): Promise<void>;
+  /**
+   * Ask again for the shelf the machine is at, against the room loaded now.
+   *
+   * Called after a room is swapped onto the screen. The machine moved before
+   * the swap, so the shelf in the new room was asked for while the old room
+   * was loaded, and a reply that arrived then was written nowhere: the
+   * destination is checked against the shelf's room. Nothing else notifies the
+   * resolver of a swap, since the machine does not move at one. A reply still
+   * in flight needs no help, because it reads the destination when it lands.
+   */
+  refresh(): void;
   /** Stop watching and abandon the shelf in flight. */
   dispose(): void;
 }
@@ -133,6 +144,10 @@ export function createTitleResolver(options: TitleResolverOptions): TitleResolve
       return new Promise<void>((resolve) => {
         idleWaiters.push(resolve);
       });
+    },
+
+    refresh(): void {
+      follow(navigation.state);
     },
 
     dispose(): void {
