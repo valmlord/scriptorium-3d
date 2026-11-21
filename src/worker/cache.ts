@@ -3,6 +3,7 @@ import {
   PAGES_PER_ROOM,
   PAGE_LENGTH,
   RADIX,
+  ROOM_COUNT,
   toLinear,
 } from '@core/address';
 import type { Address, BookAddress } from '@core/address';
@@ -54,21 +55,46 @@ import { TITLE_LENGTH } from '@core/format';
 const BYTES_PER_CHARACTER = 2;
 
 /**
- * The longest a key can be.
+ * What separates a key's room part from its index within the room.
  *
- * A key is a linear index rendered in base `RADIX`, and the largest linear
- * index in the library is `LIBRARY_SIZE - 1`, one below `RADIX ** PAGE_LENGTH`.
- * That is `PAGE_LENGTH` base-`RADIX` digits — the key of a page is as long as
- * the page it names, and the key of a title is 128 times the title. Keys are
- * therefore counted against the budget rather than dismissed as overhead;
- * ignoring them would let the title store hold 128 times the bytes it claims.
+ * Neither part can contain it: both are rendered in base `RADIX`, whose digits
+ * are `0-9a-z`, and a negative room only adds a leading `-`. Without it the
+ * two parts could not be told apart — room 1 at index 71 and room 37 at index
+ * 35 would both be `11z`.
  */
-const MAX_KEY_LENGTH = PAGE_LENGTH;
+const KEY_SEPARATOR = ':';
 
-/** What one page entry costs at the far end of the library: 12 800 bytes. */
+/**
+ * The longest room name, the last room's: 3197 base-`RADIX` digits (SPEC §3).
+ *
+ * Computed rather than written out so that it moves with `PAGE_LENGTH` and
+ * `PAGES_PER_ROOM`; it is one conversion at module load, 0.1 ms under Node.
+ */
+const LONGEST_ROOM_PART_LENGTH = (ROOM_COUNT - 1n).toString(RADIX).length;
+
+/**
+ * The longest index within a room: `PAGES_PER_ROOM - 1` = 262 399, which is
+ * `5mgv`, 4 base-`RADIX` digits.
+ */
+const LONGEST_INDEX_PART_LENGTH = (PAGES_PER_ROOM - 1).toString(RADIX).length;
+
+/**
+ * The longest a key can be: 3197 + 1 + 4 = 3202 characters.
+ *
+ * A key is a room name, the separator and an index within the room (see
+ * `GenerationCache`), so at the far end of the library the key of a page is
+ * slightly longer than the page it names, and the key of a title is 128 times
+ * the title. Keys are therefore counted against the budget rather than
+ * dismissed as overhead; ignoring them would let the title store hold 128
+ * times the bytes it claims.
+ */
+const MAX_KEY_LENGTH =
+  LONGEST_ROOM_PART_LENGTH + KEY_SEPARATOR.length + LONGEST_INDEX_PART_LENGTH;
+
+/** What one page entry costs at the far end of the library: 12 804 bytes. */
 const MAX_PAGE_ENTRY_BYTES = (MAX_KEY_LENGTH + PAGE_LENGTH) * BYTES_PER_CHARACTER;
 
-/** What one title entry costs at the far end of the library: 6 450 bytes. */
+/** What one title entry costs at the far end of the library: 6 454 bytes. */
 const MAX_TITLE_ENTRY_BYTES = (MAX_KEY_LENGTH + TITLE_LENGTH) * BYTES_PER_CHARACTER;
 
 /** Volumes in one room: 4 walls * 5 shelves * 32 volumes = 640 (SPEC §3). */
@@ -76,7 +102,7 @@ const VOLUMES_PER_ROOM = PAGES_PER_ROOM / PAGES_PER_BOOK;
 
 /**
  * The ceiling for page text: one whole volume at the worst cost an entry can
- * have, 410 * 12 800 = 5 248 000 bytes.
+ * have, 410 * 12 804 = 5 249 640 bytes.
  *
  * One volume is the bound of the access pattern that revisits a page at all.
  * Reading is page-at-a-time inside a book — flip forward, flip back, follow a
@@ -96,7 +122,7 @@ export const PAGE_BUDGET_BYTES = PAGES_PER_BOOK * MAX_PAGE_ENTRY_BYTES;
 
 /**
  * The ceiling for titles: one whole room at the worst cost an entry can have,
- * 640 * 6 450 = 4 128 000 bytes.
+ * 640 * 6 454 = 4 130 560 bytes.
  *
  * One room is the bound of the access pattern that revisits a title. Titles are
  * resolved when the camera is close enough to read them and cancelled when it
@@ -268,6 +294,69 @@ function entryBytes(key: string, value: string): number {
 }
 
 /**
+ * How many room names `RoomNames` remembers.
+ *
+ * Two rather than one because one thrashes as soon as keys from two rooms
+ * interleave, converting the room again on every key (about 50 ms per 64 keys
+ * in Chromium and 20 ms in WebKit). M7 cannot interleave: a late reply to a
+ * cancelled request is never cached and one shelf is in flight at a time.
+ * Neighbouring rooms in M9 might, and the second entry costs nothing.
+ */
+const ROOM_NAME_MEMO_ENTRIES = 2;
+
+/** A room and the key part rendered from it. */
+interface RememberedRoom {
+  readonly room: bigint;
+  readonly name: string;
+}
+
+/**
+ * A private memo of the room part of a key, most recent first.
+ *
+ * Rendering a room is the expensive half of a key: at the depth a deep link or
+ * a search hit reaches it is a conversion of up to 16 526 bits, 0.78 ms cold in
+ * Chromium, while the index within the room is at most four digits. Every key
+ * of a shelf, and of the page open beside it, renders the same room, so it is
+ * rendered once and remembered.
+ *
+ * It memoises a pure function of its argument, so it changes no answer the
+ * cache gives and no byte it counts: a caller cannot observe it except by
+ * timing. That is why it is not part of `ByteBudgetedLru`'s contract and is
+ * not charged against either budget, which bound what the cache holds for its
+ * callers, not what it holds to compute a key.
+ */
+class RoomNames {
+  private remembered: readonly RememberedRoom[] = [];
+
+  /**
+   * The room rendered in base `RADIX`.
+   *
+   * `toString(RADIX)` rather than `roomToName`: the room alphabet is exactly
+   * `0-9a-z` (`core/alphabet.ts`), so the digits are the same for every valid
+   * room, but `roomToName` throws for a negative room. That would turn
+   * `client.page` for such an address from a request that rejects with
+   * `GenerationFailedError` into a synchronous throw on the main thread. It
+   * also converts once where `roomToName` converts twice.
+   */
+  nameOf(room: bigint): string {
+    const mostRecent = this.remembered[0];
+    // The common case, every key of a shelf after its first, allocates nothing.
+    if (mostRecent?.room === room) {
+      return mostRecent.name;
+    }
+    const entry = this.remembered.find((candidate) => candidate.room === room) ?? {
+      room,
+      name: room.toString(RADIX),
+    };
+    this.remembered = [
+      entry,
+      ...this.remembered.filter((candidate) => candidate !== entry),
+    ].slice(0, ROOM_NAME_MEMO_ENTRIES);
+    return entry.name;
+  }
+}
+
+/**
  * The two caches the worker client reads through, keyed by address.
  *
  * **Pages and titles are separate stores with separate budgets**, which is what
@@ -279,36 +368,45 @@ function entryBytes(key: string, value: string): number {
  * rather than guarded against, and give each budget the property its test
  * asserts: filling one evicts nothing from the other.
  *
- * Keys are the linear index rendered as a string. An `Address` is a plain
- * object, so two addresses naming the same page are different objects and
- * identity is not a key; and the structural key a `Map` could be given would be
- * a string in the end anyway. `toLinear` is the one canonical ordering
- * (SPEC §3), so the rendering is total and injective over the address space:
- * distinct addresses cannot share a key, and the same address cannot produce
- * two.
+ * **A key is `<room>:<index within the room>`, both parts in base `RADIX`.** An
+ * `Address` is a plain object, so two addresses naming the same page are
+ * different objects and identity is not a key; and the structural key a `Map`
+ * could be given would be a string in the end anyway. The index within the
+ * room is `toLinear(address) - room * PAGES_PER_ROOM`, so the pair is the
+ * linear index split at the room boundary, and `toLinear` is the one canonical
+ * ordering (SPEC §3). Both parts are canonical renderings and the separator is
+ * in neither, so distinct addresses cannot share a key and the same address
+ * cannot produce two.
+ *
+ * The key is split rather than the whole linear index rendered because the room
+ * dominates a 16 544-bit index while being the same for all 32 volumes of a
+ * shelf: rendered whole, a shelf at a deep room is 32 conversions of it, 26.3 to
+ * 32.3 ms in Chromium as measured for M7 (ADR-0034). Split, the room is rendered once
+ * (`RoomNames`) and each key adds a remainder of at most four digits.
  */
 export class GenerationCache {
   private readonly pages = new ByteBudgetedLru(PAGE_BUDGET_BYTES);
   private readonly titles = new ByteBudgetedLru(TITLE_BUDGET_BYTES);
+  private readonly roomNames = new RoomNames();
 
   /** The cached text of one page, or `undefined`. A hit promotes it. */
   getPage(address: Address): string | undefined {
-    return this.pages.get(pageKey(address));
+    return this.pages.get(this.keyOf(address));
   }
 
   /** Cache the text of one page. */
   setPage(address: Address, text: string): void {
-    this.pages.set(pageKey(address), text);
+    this.pages.set(this.keyOf(address), text);
   }
 
   /** The cached title of one volume, or `undefined`. A hit promotes it. */
   getTitle(book: BookAddress): string | undefined {
-    return this.titles.get(titleKey(book));
+    return this.titles.get(this.titleKey(book));
   }
 
   /** Cache the title of one volume. */
   setTitle(book: BookAddress, title: string): void {
-    this.titles.set(titleKey(book), title);
+    this.titles.set(this.titleKey(book), title);
   }
 
   /** Bytes held by page text. At most `PAGE_BUDGET_BYTES`. */
@@ -330,30 +428,32 @@ export class GenerationCache {
   get titleCount(): number {
     return this.titles.size;
   }
-}
 
-/**
- * The key of a page: its linear index in base `RADIX`.
- *
- * Base `RADIX` rather than base 10 because `toString` is native for both and
- * the base-36 form is 3200 characters where the decimal form is 4981 — a third
- * less to hold, for a key nobody reads. The conversion is the documented cost
- * of a structural key: V8 renders a 16545-bit value in ~0.1 ms, an order of
- * magnitude under the 1.0 to 1.35 ms generation it saves, and it is paid once
- * per lookup rather than once per character.
- */
-function pageKey(address: Address): string {
-  return toLinear(address).toString(RADIX);
-}
+  /**
+   * The key a page is stored under, and page 0's the title of its volume.
+   *
+   * Public only so that its format can be asserted: `cache.test.ts` decodes it
+   * back into a room and an index, which is what proves it injective. Callers
+   * read through `getPage` and `getTitle` and never need a key.
+   *
+   * Base `RADIX` rather than base 10 because `toString` is native for both and
+   * the base-36 form is shorter: a room name of 3197 characters where the
+   * decimal form is 4975.
+   */
+  keyOf(address: Address): string {
+    const indexWithinRoom = toLinear(address) - address.room * BigInt(PAGES_PER_ROOM);
+    const roomPart = this.roomNames.nameOf(address.room);
+    return roomPart + KEY_SEPARATOR + indexWithinRoom.toString(RADIX);
+  }
 
-/**
- * The key of a title: the linear index of page 0 of its volume.
- *
- * A title *is* the opening of page 0 (SPEC §5), so that index names it exactly.
- * It is also the key page 0 itself would get, which is why titles are a
- * separate store rather than a prefixed key in a shared one — see
- * `GenerationCache`.
- */
-function titleKey(book: BookAddress): string {
-  return toLinear({ ...book, page: FIRST_PAGE_OF_VOLUME }).toString(RADIX);
+  /**
+   * The key of a title: the key of page 0 of its volume.
+   *
+   * A title *is* the opening of page 0 (SPEC §5), so that address names it
+   * exactly. It is also the key page 0 itself would get, which is why titles
+   * are a separate store rather than a prefixed key in a shared one.
+   */
+  private titleKey(book: BookAddress): string {
+    return this.keyOf({ ...book, page: FIRST_PAGE_OF_VOLUME });
+  }
 }

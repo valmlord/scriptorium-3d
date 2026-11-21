@@ -4,6 +4,7 @@ import type {
   CancelDisposition,
   DroppedResponse,
   FailedResponse,
+  FoundResponse,
   LocatedResponse,
   PageResponse,
   ProtocolErrorResponse,
@@ -52,6 +53,7 @@ export type IncomingResponse =
   | Pick<PageResponse, 'kind' | 'id' | 'text'>
   | Pick<TitleResponse, 'kind' | 'id' | 'title'>
   | Pick<LocatedResponse, 'kind' | 'id' | 'address'>
+  | Pick<FoundResponse, 'kind' | 'id' | 'address' | 'offset'>
   | Pick<CancelAckResponse, 'kind' | 'id' | 'disposition'>
   | Pick<DroppedResponse, 'kind' | 'id'>
   | Pick<StaleResponse, 'kind' | 'id' | 'highestIdSeen'>
@@ -81,6 +83,7 @@ const KNOWN_RESPONSE_KINDS: Record<ResponseKind, true> = {
   page: true,
   title: true,
   located: true,
+  found: true,
   'cancel-ack': true,
   dropped: true,
   stale: true,
@@ -95,7 +98,7 @@ const KNOWN_DISPOSITIONS: Record<CancelDisposition, true> = {
   'reply-in-flight': true,
 };
 
-/** Keyed by `ProtocolFault`, so a ninth fault does not compile. */
+/** Keyed by `ProtocolFault`, so a tenth fault does not compile. */
 const KNOWN_FAULTS: Record<ProtocolFault, true> = {
   'not-an-object': true,
   'array-payload': true,
@@ -104,6 +107,7 @@ const KNOWN_FAULTS: Record<ProtocolFault, true> = {
   'invalid-id': true,
   'malformed-address': true,
   'malformed-page': true,
+  'malformed-search': true,
   'unexpected-field': true,
 };
 
@@ -146,6 +150,8 @@ export function parseProtocolResponse(payload: unknown): ResponseParse {
       return parseText(id, 'title', 'title', payload.title);
     case 'located':
       return parseLocated(id, payload.address);
+    case 'found':
+      return parseFound(id, payload.address, payload.offset);
     case 'cancel-ack':
       return parseCancelAck(id, payload.disposition);
     case 'dropped':
@@ -176,17 +182,52 @@ function parseText(
   );
 }
 
+function parseLocated(id: RequestId, address: unknown): ResponseParse {
+  const located = parseAddress(address);
+  if (!located.ok) {
+    return refuse(id, located.detail);
+  }
+  return accept({ kind: 'located', id, address: located.address });
+}
+
 /**
- * Narrow the five components of an address.
+ * Narrow a search hit: the address exactly as for `located`, by shape and not
+ * by range, and the offset only as far as being a number.
+ *
+ * Whether the offset can apply is a question about the request, not the
+ * message: a query of `n` code points starts at `0` to `PAGE_LENGTH - n`, and
+ * only the client holds the query. So `takeFound` in `./client.ts` bounds it,
+ * and this checks no more than that the field is the type the protocol says.
+ */
+function parseFound(id: RequestId, address: unknown, offset: unknown): ResponseParse {
+  const found = parseAddress(address);
+  if (!found.ok) {
+    return refuse(id, found.detail);
+  }
+  if (typeof offset !== 'number') {
+    return refuse(id, `'offset' must be a number, received ${describe(offset)}`);
+  }
+  return accept({ kind: 'found', id, address: found.address, offset });
+}
+
+type AddressParse =
+  | { readonly ok: true; readonly address: Address }
+  | { readonly ok: false; readonly detail: string };
+
+/**
+ * Narrow the five components of an address, for `located` and `found` alike.
  *
  * Shape only, and no range is checked: ranges belong to `core`, which owns
- * them and reports which component and which bound (SPEC §3). A `located`
- * response can only hold an address `core` itself returned, so a range check
- * here would be a second copy of the SPEC guarding against nothing.
+ * them and reports which component and which bound (SPEC §3). Both responses
+ * can only hold an address `core` itself returned, so a range check here would
+ * be a second copy of the SPEC guarding against nothing.
  */
-function parseLocated(id: RequestId, address: unknown): ResponseParse {
+function parseAddress(address: unknown): AddressParse {
   if (!isRecord(address)) {
-    return refuse(id, `'address' must be an object, received ${describe(address)}`);
+    return {
+      ok: false,
+      detail: `'address' must be an object, received ${describe(address)}`,
+    };
   }
   const { room, wall, shelf, volume, page } = address;
   // A room is a `bigint` and crosses `postMessage` as one; structured clone
@@ -194,22 +235,24 @@ function parseLocated(id: RequestId, address: unknown): ResponseParse {
   // a room at all. There is no number-shaped fallback to accept instead:
   // `Number(room)` on a 4975-digit value is `Infinity` (`code-style.md` §1).
   if (typeof room !== 'bigint') {
-    return refuse(id, `'address.room' must be a bigint, received ${describe(room)}`);
+    return {
+      ok: false,
+      detail: `'address.room' must be a bigint, received ${describe(room)}`,
+    };
   }
   if (!isAddressComponent(wall)) {
-    return refuse(id, component('wall', wall));
+    return { ok: false, detail: component('wall', wall) };
   }
   if (!isAddressComponent(shelf)) {
-    return refuse(id, component('shelf', shelf));
+    return { ok: false, detail: component('shelf', shelf) };
   }
   if (!isAddressComponent(volume)) {
-    return refuse(id, component('volume', volume));
+    return { ok: false, detail: component('volume', volume) };
   }
   if (!isAddressComponent(page)) {
-    return refuse(id, component('page', page));
+    return { ok: false, detail: component('page', page) };
   }
-  const located: Address = { room, wall, shelf, volume, page };
-  return accept({ kind: 'located', id, address: located });
+  return { ok: true, address: { room, wall, shelf, volume, page } };
 }
 
 function parseCancelAck(id: RequestId, disposition: unknown): ResponseParse {

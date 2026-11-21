@@ -9,8 +9,9 @@ import {
   getPage,
   getTitle,
   locate,
+  search,
 } from '@core/index';
-import type { Address, BookAddress } from '@core/index';
+import type { Address, BookAddress, PadMode, RandomSource } from '@core/index';
 import {
   createProtocolHandlerState,
   handleProtocolMessage,
@@ -21,6 +22,11 @@ import {
   type ProtocolResponse,
   type ResponseKind,
 } from '../protocol';
+import {
+  PINNED_SOURCE_BYTE_CAP,
+  PinnedSourceExhaustedError,
+  pinnedRandomSource,
+} from './pinned-random';
 
 /**
  * The protocol handler is a pure function, so every case below is an example or
@@ -53,11 +59,23 @@ const FIRST_BOOK: BookAddress = { room: 0n, wall: 0, shelf: 0, volume: 0 };
 const REJECTED_ADDRESS: Address = { room: -1n, wall: 0, shelf: 0, volume: 0, page: 0 };
 const REJECTED_BOOK: BookAddress = { room: -1n, wall: 0, shelf: 0, volume: 0 };
 
+/**
+ * The seed for every case that does not care which bytes it is given. Only a
+ * `search` reads the source at all.
+ */
+const ANY_SEED = 1;
+
+/** A fresh pinned source, so no two cases share the bytes one of them drew. */
+function anySource(): RandomSource {
+  return pinnedRandomSource(ANY_SEED);
+}
+
 /** Every kind the response union admits, so a test can assert totality. */
 const RESPONSE_KINDS: Record<ResponseKind, true> = {
   page: true,
   title: true,
   located: true,
+  found: true,
   'cancel-ack': true,
   dropped: true,
   stale: true,
@@ -66,7 +84,13 @@ const RESPONSE_KINDS: Record<ResponseKind, true> = {
 };
 
 /** The response kinds that mean `core` was actually called for this id. */
-const RESULT_KINDS: readonly ResponseKind[] = ['page', 'title', 'located', 'failed'];
+const RESULT_KINDS: readonly ResponseKind[] = [
+  'page',
+  'title',
+  'located',
+  'found',
+  'failed',
+];
 
 function isResponseKind(response: ProtocolResponse): boolean {
   return Object.hasOwn(RESPONSE_KINDS, response.kind);
@@ -81,7 +105,7 @@ function run(payloads: readonly unknown[]): {
   const responses: ProtocolResponse[] = [];
   const states: ProtocolHandlerState[] = [state];
   for (const payload of payloads) {
-    const outcome = handleProtocolMessage(payload, state);
+    const outcome = handleProtocolMessage(payload, state, anySource());
     responses.push(outcome.response);
     state = outcome.state;
     states.push(state);
@@ -91,7 +115,8 @@ function run(payloads: readonly unknown[]): {
 
 /** The single response to a single payload handled from a fresh state. */
 function answer(payload: unknown): ProtocolResponse {
-  return handleProtocolMessage(payload, createProtocolHandlerState()).response;
+  return handleProtocolMessage(payload, createProtocolHandlerState(), anySource())
+    .response;
 }
 
 describe('a well-formed request', () => {
@@ -226,7 +251,8 @@ describe('a request core refuses', () => {
   it('still advances the watermark, because the id has had its one answer', () => {
     const outcome = handleProtocolMessage(
       { kind: 'page', id: 9, address: REJECTED_ADDRESS },
-      createProtocolHandlerState()
+      createProtocolHandlerState(),
+      anySource()
     );
 
     expect(outcome.state.highestIdSeen).toBe(9);
@@ -288,7 +314,8 @@ describe('a payload whose kind is not usable', () => {
   });
 
   it('refuses a string kind this protocol does not define', () => {
-    const response = answer({ kind: 'search', id: 1, query: 'бабилон' });
+    // A shelf is a unit the client fans out, never a message (`protocol.ts`).
+    const response = answer({ kind: 'shelf', id: 1, shelf: 0 });
 
     expect(response.kind === 'protocol-error' && response.fault).toBe('unknown-kind');
   });
@@ -302,7 +329,7 @@ describe('a payload whose kind is not usable', () => {
   });
 
   it('names the id of an unknown kind, so the client can settle that promise', () => {
-    const response = answer({ kind: 'search', id: 55 });
+    const response = answer({ kind: 'shelf', id: 55 });
 
     expect(response.id).toBe(55);
   });
@@ -476,6 +503,192 @@ describe('a locate request whose page is misshapen', () => {
   });
 });
 
+describe('a search request', () => {
+  /**
+   * Checked, for every length in `QUERY_LENGTHS`, both to terminate and to give
+   * a random hit that differs from the spaces hit. Seed 2 is left out on
+   * purpose: at 3199 code points its one-character random pad is a space, the
+   * case that turns up for about one seed in 36, and the two hits coincide.
+   */
+  const PINNED_SEEDS = [1, 3, 4] as const;
+
+  /**
+   * Every length is shorter than a page: at `PAGE_LENGTH` there is no padding
+   * and the two modes give the same page, so a handler that dropped the mode
+   * would pass. `PAGE_LENGTH - 1` is the shortest pad there is.
+   */
+  const QUERY_LENGTHS = [7, PAGE_LENGTH / 2, PAGE_LENGTH - 1] as const;
+
+  const PAD_MODES: readonly PadMode[] = ['spaces', 'random'];
+
+  const PHRASE = 'в библиотеке вавилона, ';
+
+  function queryOfLength(length: number): string {
+    return PHRASE.repeat(Math.ceil(length / PHRASE.length)).slice(0, length);
+  }
+
+  function searchAnswer(query: string, mode: PadMode, seed: number): ProtocolResponse {
+    return handleProtocolMessage(
+      { kind: 'search', id: 1, query, mode },
+      createProtocolHandlerState(),
+      pinnedRandomSource(seed)
+    ).response;
+  }
+
+  const everyCase = PINNED_SEEDS.flatMap((seed) =>
+    QUERY_LENGTHS.flatMap((length) =>
+      PAD_MODES.map((mode) => [seed, length, mode] as const)
+    )
+  );
+
+  it.each(everyCase)(
+    'a search message answers found with exactly the hit core computes for the same bytes: seed %i, %i code points, %s',
+    (seed, length, mode) => {
+      const query = queryOfLength(length);
+      const expected = search(query, mode, undefined, pinnedRandomSource(seed));
+
+      const response = searchAnswer(query, mode, seed);
+
+      expect(response).toEqual({
+        kind: 'found',
+        id: 1,
+        address: expected.address,
+        offset: expected.offset,
+      });
+    }
+  );
+
+  const seedsAndLengths = PINNED_SEEDS.flatMap((seed) =>
+    QUERY_LENGTHS.map((length) => [seed, length] as const)
+  );
+
+  it.each(seedsAndLengths)(
+    'a random hit differs from the spaces hit for the same bytes: seed %i, %i code points',
+    (seed, length) => {
+      const query = queryOfLength(length);
+
+      const spaces = searchAnswer(query, 'spaces', seed);
+      const random = searchAnswer(query, 'random', seed);
+
+      expect(spaces.kind).toBe('found');
+      expect(random.kind).toBe('found');
+      expect(random).not.toEqual(spaces);
+    }
+  );
+
+  it('a pinned source past its byte cap throws PinnedSourceExhaustedError rather than spinning', () => {
+    const source = pinnedRandomSource(ANY_SEED);
+    source(PINNED_SOURCE_BYTE_CAP);
+
+    expect(() => source(1)).toThrow(PinnedSourceExhaustedError);
+  });
+
+  it('answers a search whose source runs dry as failed, naming it, rather than hanging', () => {
+    const source = pinnedRandomSource(ANY_SEED);
+    source(PINNED_SOURCE_BYTE_CAP);
+
+    const response = handleProtocolMessage(
+      { kind: 'search', id: 1, query: 'вавилон', mode: 'random' },
+      createProtocolHandlerState(),
+      source
+    ).response;
+
+    expect(response.kind === 'failed' && response.error.name).toBe(
+      'PinnedSourceExhaustedError'
+    );
+  });
+
+  it.each([
+    ['a mode that names no pad mode', { query: 'вавилон', mode: 'sideways' }, "'mode'"],
+    [
+      'a mode inherited from Object.prototype',
+      { query: 'вавилон', mode: 'constructor' },
+      "'mode'",
+    ],
+    ['no mode', { query: 'вавилон' }, "'mode'"],
+    ['a mode that is not a string', { query: 'вавилон', mode: 1 }, "'mode'"],
+    ['a query that is not a string', { query: 7, mode: 'random' }, "'query'"],
+    ['no query', { mode: 'random' }, "'query'"],
+  ])(
+    'a search with an unknown mode or a non-string query is a malformed-search protocol error: %s',
+    (_description, body, field) => {
+      const response = answer({ kind: 'search', id: 3, ...body });
+
+      expect(response.kind === 'protocol-error' && response.fault).toBe(
+        'malformed-search'
+      );
+      expect(response.id).toBe(3);
+      expect(response.kind === 'protocol-error' && response.detail).toContain(field);
+      expect(response.kind === 'protocol-error' && response.detail).not.toContain(
+        'sideways'
+      );
+    }
+  );
+
+  it.each([
+    ['a number', 0],
+    ['undefined', undefined],
+  ])(
+    'a search carrying an offset is refused as an unexpected field: an offset of %s',
+    (_description, offset) => {
+      const response = answer({
+        kind: 'search',
+        id: 4,
+        query: 'вавилон',
+        mode: 'spaces',
+        offset,
+      });
+
+      expect(response.kind === 'protocol-error' && response.fault).toBe(
+        'unexpected-field'
+      );
+      expect(response.kind === 'protocol-error' && response.detail).toContain(
+        "'offset'"
+      );
+    }
+  );
+
+  it('a search carrying an unknown field is answered normally', () => {
+    const query = 'вавилон';
+
+    const response = handleProtocolMessage(
+      { kind: 'search', id: 1, query, mode: 'random', priority: 'high' },
+      createProtocolHandlerState(),
+      pinnedRandomSource(ANY_SEED)
+    ).response;
+
+    expect(response).toEqual(searchAnswer(query, 'random', ANY_SEED));
+    expect(response.kind).toBe('found');
+  });
+
+  it.each([
+    ['an empty query', '', 'InvalidSearchQueryError'],
+    [
+      'a query longer than a page',
+      'а'.repeat(PAGE_LENGTH + 1),
+      'InvalidSearchQueryError',
+    ],
+    ['a symbol outside the alphabet', 'babel', 'UnknownSymbolError'],
+  ])(
+    "a query core refuses is answered as failed with the error's name: %s",
+    (_description, query, name) => {
+      const response = answer({ kind: 'search', id: 6, query, mode: 'random' });
+
+      expect(response.kind).toBe('failed');
+      expect(response.id).toBe(6);
+      expect(response.kind === 'failed' && response.error.name).toBe(name);
+    }
+  );
+
+  it('a search cancelled before it arrives is dropped and carries the request', () => {
+    const request = { kind: 'search', id: 5, query: 'вавилон', mode: 'random' };
+
+    const { responses } = run([{ kind: 'cancel', id: 5 }, request]);
+
+    expect(responses[1]).toEqual({ kind: 'dropped', id: 5, request });
+  });
+});
+
 describe('a protocol error', () => {
   it('names the id when the id is sound but the body is not', () => {
     const response = answer({ kind: 'page', id: 31, address: { room: 0 } });
@@ -493,7 +706,7 @@ describe('a protocol error', () => {
   it('does not touch the handler state, since nothing was answered for an id', () => {
     const before = createProtocolHandlerState();
 
-    const outcome = handleProtocolMessage({ kind: 'nonsense' }, before);
+    const outcome = handleProtocolMessage({ kind: 'nonsense' }, before, anySource());
 
     expect(outcome.state).toBe(before);
   });
@@ -725,8 +938,12 @@ describe('the handler as a pure function', () => {
   it('does not mutate the state it was given', () => {
     const state = createProtocolHandlerState();
 
-    handleProtocolMessage({ kind: 'cancel', id: 5 }, state);
-    handleProtocolMessage({ kind: 'title', id: 9, book: REJECTED_BOOK }, state);
+    handleProtocolMessage({ kind: 'cancel', id: 5 }, state, anySource());
+    handleProtocolMessage(
+      { kind: 'title', id: 9, book: REJECTED_BOOK },
+      state,
+      anySource()
+    );
 
     expect(state.highestIdSeen).toBe(0);
     expect(state.cancelledIds.size).toBe(0);
@@ -736,7 +953,7 @@ describe('the handler as a pure function', () => {
     const payload = { kind: 'page', id: 1, address: { ...FIRST_ADDRESS } };
     const snapshot = structuredClone(payload);
 
-    handleProtocolMessage(payload, createProtocolHandlerState());
+    handleProtocolMessage(payload, createProtocolHandlerState(), anySource());
 
     expect(payload).toEqual(snapshot);
   });
@@ -745,8 +962,8 @@ describe('the handler as a pure function', () => {
     const state = createProtocolHandlerState();
     const payload = { kind: 'title', id: 2, book: FIRST_BOOK };
 
-    const first = handleProtocolMessage(payload, state);
-    const second = handleProtocolMessage(payload, state);
+    const first = handleProtocolMessage(payload, state, anySource());
+    const second = handleProtocolMessage(payload, state, anySource());
 
     expect(second.response).toEqual(first.response);
     expect(second.state).toEqual(first.state);
@@ -808,7 +1025,7 @@ describe('the handler over generated input', () => {
   it('answers every payload with one response of a kind the protocol defines', () => {
     fc.assert(
       fc.property(fc.anything(), arbitraryState, (payload, state) => {
-        const outcome = handleProtocolMessage(payload, state);
+        const outcome = handleProtocolMessage(payload, state, anySource());
         return isResponseKind(outcome.response);
       }),
       { numRuns: 1000 }
@@ -818,7 +1035,7 @@ describe('the handler over generated input', () => {
   it('never throws, whatever the payload turns out to be', () => {
     fc.assert(
       fc.property(fc.anything(), arbitraryState, (payload, state) => {
-        expect(() => handleProtocolMessage(payload, state)).not.toThrow();
+        expect(() => handleProtocolMessage(payload, state, anySource())).not.toThrow();
       }),
       { numRuns: 1000 }
     );
@@ -830,7 +1047,7 @@ describe('the handler over generated input', () => {
         const watermark = state.highestIdSeen;
         const cancelled = [...state.cancelledIds];
 
-        handleProtocolMessage(payload, state);
+        handleProtocolMessage(payload, state, anySource());
 
         return (
           state.highestIdSeen === watermark &&
@@ -856,7 +1073,7 @@ describe('the handler over generated input', () => {
             ? { kind: 'cancel', id }
             : { kind: 'title', id, book: REJECTED_BOOK };
 
-          return handleProtocolMessage(payload, state).response.id === id;
+          return handleProtocolMessage(payload, state, anySource()).response.id === id;
         }
       ),
       { numRuns: 1000 }

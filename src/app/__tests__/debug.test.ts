@@ -4,7 +4,7 @@ import { motionClockSeconds } from '@motion/clock';
 import { createChoreography } from '@app/choreography';
 import type { Choreography } from '@app/choreography';
 import { installDebugHook } from '@app/debug';
-import type { DebugHookTarget } from '@app/debug';
+import type { DebugHookTarget, MemorySnapshot } from '@app/debug';
 import { FrameTimingsUnavailableError } from '@app/errors';
 
 /**
@@ -22,19 +22,34 @@ const TARGET = { room: ROOM, wall: 2, shelf: 1, volume: 30 };
 const FRAME_SECONDS = 1 / 60;
 const MAX_FRAMES = 2000;
 
-function installedHook(): {
+function installedHook(memory: () => MemorySnapshot = idleMemory): {
   target: DebugHookTarget;
   choreography: Choreography;
 } {
-  const choreography = createChoreography(ROOM);
+  // A screen that shows whatever it was last asked to, standing in for the
+  // viewer; nothing here changes rooms, so it only ever shows `ROOM`.
+  let shown = ROOM;
+  const choreography = createChoreography(ROOM, {
+    shownRoom: () => shown,
+    showRoom: (room) => {
+      shown = room;
+    },
+    prefersReducedMotion: () => false,
+  });
   const target: DebugHookTarget = {};
   installDebugHook(target, {
     state: () => choreography.state,
     address: () => choreography.address,
     rig: () => choreography.rig(),
+    memory,
     waitForIdle: () => choreography.whenIdle(),
   });
   return { target, choreography };
+}
+
+/** A device holding nothing, for the tests that do not ask about memory. */
+function idleMemory(): MemorySnapshot {
+  return { geometries: 0, textures: 0, programs: 0, isRetiring: false };
 }
 
 function flyOn(choreography: Choreography): void {
@@ -79,6 +94,29 @@ describe('the debug hook', () => {
 
     expect(first).not.toBe(second);
     expect(first).toEqual(second);
+    choreography.dispose();
+  });
+
+  it('reads memory from its probe on every call, not once at install', () => {
+    // A device that releases a room between the two reads, as the retirement
+    // policy does after a render: an end-to-end test reads this every frame.
+    const snapshots: readonly MemorySnapshot[] = [
+      { geometries: 10, textures: 4, programs: 6, isRetiring: true },
+      { geometries: 5, textures: 2, programs: 6, isRetiring: false },
+    ];
+    let reads = 0;
+    const { target, choreography } = installedHook(() => {
+      const snapshot = snapshots[Math.min(reads, snapshots.length - 1)] ?? idleMemory();
+      reads += 1;
+      return snapshot;
+    });
+    const hook = target.__scriptorium;
+
+    const first = hook?.memory();
+    const second = hook?.memory();
+
+    expect(first).toEqual(snapshots[0]);
+    expect(second).toEqual(snapshots[1]);
     choreography.dispose();
   });
 

@@ -68,21 +68,64 @@ export default defineConfig({
         'src/*/index.ts',
       ],
       // Glob-keyed thresholds; a matched file does not inherit global ones.
-      // engine/ and ui/ carry no threshold on purpose — they are covered by e2e.
+      // engine/ and ui/ are covered by e2e and carry no layer threshold on
+      // purpose, because most of each needs WebGL or a DOM. The modules of
+      // each that need neither have floors of their own. In engine/,
+      // `retirement.ts`, which decides when a replaced room is disposed, holds
+      // no three.js and is unit-tested whole, so it is kept at 100. In ui/,
+      // the four pure modules (`query.ts`, `highlight.ts`, `page-grid.ts`,
+      // `room-name.ts`) and the DOM-free search session (`search-session.ts`)
+      // are kept at 90; `reader.ts` and `search.ts` build the DOM and are
+      // Playwright's alone.
+      //
+      // **One glob per module, never one brace glob over several.** Vitest
+      // pools the files a glob matches, so a fully tested `query.ts` beside a
+      // `search-session.ts` at 0% branches passes a pooled `{a,b}.ts` floor.
       //
       // app/ had none either, and that was an omission rather than a decision:
       // it is where the projections live, so M6 put the title resolver and the
       // composition of `waitForIdle()` there, which is the most
       // order-dependent code in the repository. Its floor is 80 rather than
-      // 90 because `controls.ts` installs DOM pointer handlers and is reached
-      // only from Playwright, so it sits at 0 here and the layer still
-      // aggregates to 87.
+      // 90 because `controls.ts` installs DOM pointer handlers that only
+      // Playwright reaches; its one DOM-free predicate, `isEditableTarget`, is
+      // unit-tested, and the rest of the file stays below the line here.
       thresholds: {
         'src/core/**': { lines: 100, branches: 100, functions: 100, statements: 100 },
         'src/worker/**': { lines: 90, branches: 90, functions: 90, statements: 90 },
         'src/state/**': { lines: 90, branches: 90, functions: 90, statements: 90 },
         'src/app/**': { lines: 80, branches: 80, functions: 80, statements: 80 },
         'src/motion/**': { lines: 80, branches: 80, functions: 80, statements: 80 },
+        'src/engine/retirement.ts': {
+          lines: 100,
+          branches: 100,
+          functions: 100,
+          statements: 100,
+        },
+        'src/ui/query.ts': { lines: 90, branches: 90, functions: 90, statements: 90 },
+        'src/ui/search-session.ts': {
+          lines: 90,
+          branches: 90,
+          functions: 90,
+          statements: 90,
+        },
+        'src/ui/highlight.ts': {
+          lines: 90,
+          branches: 90,
+          functions: 90,
+          statements: 90,
+        },
+        'src/ui/page-grid.ts': {
+          lines: 90,
+          branches: 90,
+          functions: 90,
+          statements: 90,
+        },
+        'src/ui/room-name.ts': {
+          lines: 90,
+          branches: 90,
+          functions: 90,
+          statements: 90,
+        },
       },
     },
   },

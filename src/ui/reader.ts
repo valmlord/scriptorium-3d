@@ -4,7 +4,10 @@ import { AddressBeyondLibraryError } from '@core/errors';
 import { addressOf, bookAddressOf } from '@state/navigation';
 import type { Navigation, NavigationState } from '@state/navigation';
 import type { GenerationRequest } from '@worker/client';
-import { READER_ROWS, pageLines } from './page-grid';
+import { highlightAt } from './highlight';
+import type { Highlight } from './highlight';
+import { READER_ROWS, highlightedLines } from './page-grid';
+import type { LineSegment } from './page-grid';
 import './reader.css';
 
 /**
@@ -27,6 +30,15 @@ import './reader.css';
  * **The text is text.** 80 line elements of 40 characters, selectable and
  * copyable, laid out by a monospace font rather than drawn into a texture
  * (`./page-grid.ts`). A `<canvas>` would be faster and would not be a page.
+ *
+ * **The phrase a search found is marked, and only on its own page.** The
+ * marks are a function of the machine's address and the last hit
+ * (`./highlight.ts`), computed the moment a page is written: a `<mark>` per
+ * line the phrase crosses, created as an element with its text set as text,
+ * never parsed. A hit on the page already open moves the machine nowhere, so
+ * the reader also listens to the highlight and rewrites the page on screen
+ * when the hit changes, with the same guard as a page: only while the machine
+ * has that page open.
  *
  * **What it does not reach for.** `@core/address` for the arithmetic of an
  * address and `@state` for where the user is; the generation client is
@@ -54,6 +66,8 @@ export interface ReaderOptions {
   readonly navigation: Navigation;
   /** Where the text comes from. */
   readonly source: BookSource;
+  /** The last search hit, marked while the machine has its page open. */
+  readonly highlight: Highlight;
 }
 
 /** The reader overlay, mounted and watching the machine. */
@@ -101,7 +115,7 @@ const TEXT = {
 
 /** Build the reader, mount it, and start projecting `navigation`. */
 export function createReader(options: ReaderOptions): Reader {
-  const { container, navigation, source } = options;
+  const { container, navigation, source, highlight } = options;
 
   const lineElements: readonly HTMLParagraphElement[] = buildLines();
   const title = element('h2', 'reader-title');
@@ -150,6 +164,9 @@ export function createReader(options: ReaderOptions): Reader {
   /** The page whose text is in the DOM, if any. */
   let rendered: Address | null = null;
 
+  /** That page's text, kept so a new hit can be marked without asking again. */
+  let renderedText: string | null = null;
+
   /**
    * The page the reader has finished dealing with, written or refused. It is
    * `rendered` except after a failure, and the difference is what keeps
@@ -187,6 +204,7 @@ export function createReader(options: ReaderOptions): Reader {
 
     dispose(): void {
       unsubscribe();
+      unsubscribeHighlight();
       previous.removeEventListener('click', onPrevious);
       next.removeEventListener('click', onNext);
       close.removeEventListener('click', onClose);
@@ -210,6 +228,7 @@ export function createReader(options: ReaderOptions): Reader {
   close.addEventListener('click', onClose);
 
   const unsubscribe = navigation.subscribe(project);
+  const unsubscribeHighlight = highlight.subscribe(remark);
   project(navigation.state);
 
   return reader;
@@ -233,6 +252,7 @@ export function createReader(options: ReaderOptions): Reader {
   function shut(): void {
     open = null;
     rendered = null;
+    renderedText = null;
     settled = null;
     titled = null;
     requestedPage = null;
@@ -294,26 +314,23 @@ export function createReader(options: ReaderOptions): Reader {
       return;
     }
 
-    let lines: readonly string[];
+    let lines: readonly (readonly LineSegment[])[];
     try {
       // The text crossed a `postMessage` boundary, so its length is checked
       // before anything here is written or forgotten (`./errors.ts`). Validated
       // *first*, because a throw after `forgetPageRequest` would leave this
       // page neither rendered nor settled, and the reader would never report
       // itself idle again.
-      lines = pageLines(text);
+      lines = highlightedLines(text, highlightAt(highlight.hit, address));
     } catch (error: unknown) {
       refuse(from, address, error);
       return;
     }
 
     forgetPageRequest(from);
-    // Zipped over the lines and looked up by row: both are `READER_ROWS` long
-    // by construction, so there is nothing to guard against here.
-    lines.forEach((line, row) => {
-      lineElements[row]?.replaceChildren(line);
-    });
+    writeLines(lines);
     rendered = address;
+    renderedText = text;
     settled = address;
     page.setAttribute('aria-busy', 'false');
     showStatus(address, false);
@@ -349,6 +366,28 @@ export function createReader(options: ReaderOptions): Reader {
     page.setAttribute('aria-busy', 'false');
     status.replaceChildren(`${TEXT.unavailable}: ${describe(error)}`);
     release();
+  }
+
+  /**
+   * Mark the last hit on the page on screen, if the machine still has that
+   * page open. A page still on its way is marked when it arrives instead.
+   */
+  function remark(): void {
+    if (rendered === null || renderedText === null || !isOpen(rendered)) {
+      return;
+    }
+    writeLines(highlightedLines(renderedText, highlightAt(highlight.hit, rendered)));
+  }
+
+  /**
+   * Write the lines into the line elements, a `<mark>` for each marked run.
+   * Zipped over the lines and looked up by row: both are `READER_ROWS` long by
+   * construction, so there is nothing to guard against here.
+   */
+  function writeLines(lines: readonly (readonly LineSegment[])[]): void {
+    lines.forEach((segments, row) => {
+      lineElements[row]?.replaceChildren(...segments.map(segmentNode));
+    });
   }
 
   /** Ask for the volume's title unless the heading already carries it. */
@@ -518,6 +557,20 @@ export function createReader(options: ReaderOptions): Reader {
       resolve();
     }
   }
+}
+
+/**
+ * One run of a line as a DOM child: a string, which `replaceChildren` turns
+ * into a text node, or a created `<mark>` whose text is set as text. Generated
+ * text never passes through an HTML parser.
+ */
+function segmentNode(segment: LineSegment): Node | string {
+  if (!segment.isMarked) {
+    return segment.text;
+  }
+  const mark = element('mark', 'reader-mark');
+  mark.textContent = segment.text;
+  return mark;
 }
 
 /** The 80 line elements, built once and rewritten on every turn. */

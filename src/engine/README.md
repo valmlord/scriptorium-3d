@@ -13,7 +13,17 @@ Three.js scene and rendering. Low-level mesh manipulation, rendering loop, camer
   with no browser in it; `titles.ts` is the canvas, the texture and the patched `MeshStandardMaterial`
   shader that reads it at a per-instance offset. It allocates nothing until the first shelf of titles
   arrives, so a room nobody has read a spine of is the mesh M4 built, and it never redraws a shelf it
-  already holds, because sending the atlas again costs a frame where painting a cell costs nothing
+  already holds, because sending the atlas again costs a frame where painting a cell costs nothing.
+  `isTitled` says whether the spines' material has been patched to the titled variant
+- The viewer in `viewer.ts`: the renderer, the scene, the one animation loop and the loaded room.
+  `loadRoom` builds the new room, takes the old one out of the scene at once and hands it to the
+  retirement policy rather than disposing it. Every render goes through one private `renderFrame()`,
+  which is the render and the report of it to the policy and nothing else;
+  `__tests__/render-frame.test.ts` holds it to that shape with twelve assertions (ADR-0034)
+- The retirement policy in `retirement.ts`: when a replaced room is let go. Disposing it before the
+  new room has rendered frees the shader programs the new room is about to use, so a room that has
+  rendered with titles is kept until the loaded room has too, and one that has not goes no later
+  than the next render. One slot, no three.js, unit-tested whole with a coverage floor of 100
 
 ## What cannot be imported
 

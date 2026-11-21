@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import fc from 'fast-check';
 import {
   BOOKS_PER_SHELF,
   PAGES_IN_LAST_ROOM,
@@ -6,18 +7,16 @@ import {
   ROOM_COUNT,
   SHELVES_PER_WALL,
   WALLS_PER_ROOM,
+  assertValidAddress,
 } from '@core/address';
 import { AddressBeyondLibraryError, InvalidAddressError } from '@core/errors';
-import {
-  IllegalTransitionError,
-  NonIntegerComponentError,
-  RoomChangeUnsupportedError,
-} from '@state/errors';
+import { IllegalTransitionError, NonIntegerComponentError } from '@state/errors';
 import {
   NAVIGATION_EVENT_TYPES,
   NAVIGATION_LEVELS,
   addressOf,
   atBookAddress,
+  atPageAddress,
   bookAddressOf,
   createNavigation,
   depthOf,
@@ -37,7 +36,7 @@ import type {
 /**
  * An FSM is a finite object, so "we tested the paths we thought of" is a
  * choice rather than a limitation (`docs/testing.md` §1). The first suite below
- * asserts all twenty `(level, event)` pairs: four levels times five events,
+ * asserts all twenty-four `(level, event)` pairs: four levels times six events,
  * each one legal or refused, with nothing left to assumption.
  *
  * The transition table in `navigation.ts` is data, and `transition` is code
@@ -59,6 +58,9 @@ const VOLUME = 3;
  * that a test cannot pass by a turn being a no-op.
  */
 const PAGE = 7;
+
+/** A room other than `ROOM`, whose name (`b`) is not a decimal digit. */
+const OTHER_ROOM = 11n;
 
 /** The state at one named level, narrowed out of the union. */
 type StateAt<Level extends NavigationLevel> = Extract<
@@ -89,6 +91,7 @@ const EVENTS: Readonly<Record<NavigationEventType, NavigationEvent>> = {
   'select-volume': { type: 'select-volume', volume: VOLUME },
   'turn-page': { type: 'turn-page', page: PAGE },
   back: { type: 'back' },
+  'enter-room': { type: 'enter-room', room: OTHER_ROOM },
 };
 
 /** Every pair of the table, as the test's own cartesian product. */
@@ -136,6 +139,77 @@ const LADDER: readonly NavigationState[] = [
   ),
 ];
 
+/**
+ * Rooms for the cross-room property: the first, the last (whose unfilled tail
+ * is where a route can name a volume that does not exist) and anything
+ * between.
+ */
+const anyRoom = fc.oneof(
+  fc.constantFrom(0n, ROOM_COUNT - 1n),
+  fc.bigInt({ min: 0n, max: ROOM_COUNT - 1n })
+);
+
+/**
+ * A component drawn mostly from two values, so that two states drawn
+ * independently share a wall, a shelf and a volume often enough for the case
+ * the cross-room branch exists for to come up in most runs.
+ */
+function anyComponent(
+  count: number,
+  frequent: readonly number[]
+): fc.Arbitrary<number> {
+  return fc.oneof(
+    { weight: 3, arbitrary: fc.constantFrom(...frequent) },
+    { weight: 1, arbitrary: fc.integer({ min: 0, max: count - 1 }) }
+  );
+}
+
+/** Any state that exists, at any level, in any room. */
+const anyState: fc.Arbitrary<NavigationState> = fc
+  .record({
+    level: fc.constantFrom(...NAVIGATION_LEVELS),
+    room: anyRoom,
+    wall: anyComponent(WALLS_PER_ROOM, [0, WALLS_PER_ROOM - 1]),
+    shelf: anyComponent(SHELVES_PER_WALL, [0, SHELVES_PER_WALL - 1]),
+    volume: anyComponent(BOOKS_PER_SHELF, [0, 29]),
+    page: anyComponent(PAGES_PER_BOOK, [0, PAGE]),
+  })
+  .map(({ level, room, wall, shelf, volume, page }): NavigationState => {
+    switch (level) {
+      case 'room':
+        return { level, room };
+      case 'wall':
+        return { level, room, wall };
+      case 'shelf':
+        return { level, room, wall, shelf };
+      case 'book':
+        return { level, room, wall, shelf, volume, page };
+    }
+  })
+  .filter(exists);
+
+/** Whether a state names something in the library, judged by `core` alone. */
+function exists(state: NavigationState): boolean {
+  try {
+    assertValidAddress({
+      room: state.room,
+      wall: 'wall' in state ? state.wall : 0,
+      shelf: 'shelf' in state ? state.shelf : 0,
+      volume: 'volume' in state ? state.volume : 0,
+      page: 'page' in state ? state.page : 0,
+    });
+    return true;
+  } catch (error: unknown) {
+    if (
+      error instanceof InvalidAddressError ||
+      error instanceof AddressBeyondLibraryError
+    ) {
+      return false;
+    }
+    throw error;
+  }
+}
+
 /** The `IllegalTransitionError` a pair raises, narrowed rather than asserted. */
 function refusalOf(
   state: NavigationState,
@@ -171,14 +245,15 @@ describe('the transition table', () => {
     }
   );
 
-  it('declares seven of its twenty pairs legal, and not one more', () => {
+  it('the transition table is total over 24 pairs', () => {
     const legal = ALL_PAIRS.filter((pair) =>
       isLegalTransition(pair.level, pair.eventType)
     );
 
-    expect(ALL_PAIRS).toHaveLength(20);
+    expect(ALL_PAIRS).toHaveLength(24);
     expect(legal.map((pair) => `${pair.level}:${pair.eventType}`)).toEqual([
       'room:select-wall',
+      'room:enter-room',
       'wall:select-shelf',
       'wall:back',
       'shelf:select-volume',
@@ -365,6 +440,12 @@ describe('a navigation request for something that does not exist', () => {
     ).toThrow(InvalidAddressError);
   });
 
+  it('enter-room refuses a room past the end of the library', () => {
+    expect(() =>
+      transition(STATES.room, { type: 'enter-room', room: ROOM_COUNT })
+    ).toThrow(InvalidAddressError);
+  });
+
   it('refuses a room outside the library, through core', () => {
     expect(() => enterRoom(ROOM_COUNT)).toThrow(InvalidAddressError);
     expect(() => enterRoom(-1n)).toThrow(InvalidAddressError);
@@ -495,11 +576,57 @@ describe('the route between two states', () => {
     ]);
   });
 
-  it('refuses a route into another room, naming both', () => {
-    const elsewhere = enterRoom(37n);
+  it('routes into another room by climbing to the room level, entering it and descending', () => {
+    const elsewhere: NavigationState = { ...TURNED, room: OTHER_ROOM };
 
-    expect(() => eventsTo(STATES.room, elsewhere)).toThrow(RoomChangeUnsupportedError);
-    expect(() => eventsTo(STATES.room, elsewhere)).toThrow(/room 0 to room 11/);
+    // The same wall, shelf and volume in both rooms, which is the case the
+    // general rule gets wrong: below the room the two states agree, so without
+    // the cross-room branch the route is one page turn in the wrong room.
+    expect(eventsTo(STATES.book, elsewhere)).toEqual([
+      { type: 'back' },
+      { type: 'back' },
+      { type: 'back' },
+      { type: 'enter-room', room: OTHER_ROOM },
+      { type: 'select-wall', wall: WALL },
+      { type: 'select-shelf', shelf: SHELF },
+      { type: 'select-volume', volume: VOLUME },
+      { type: 'turn-page', page: PAGE },
+    ]);
+  });
+
+  it('a route across rooms passes through the room level exactly once', () => {
+    const from: NavigationState = { ...STATES.book, wall: 0 };
+    const to: NavigationState = { ...TURNED, room: OTHER_ROOM };
+
+    const visited = eventsTo(from, to).reduce<NavigationState[]>(
+      (states, event) => [...states, transition(states.at(-1) ?? from, event)],
+      [from]
+    );
+    const atRoomLevel = visited.flatMap((state, index) =>
+      state.level === 'room' ? [index] : []
+    );
+
+    // One climb and one descent: the two room-level states are the top of the
+    // room left and the top of the room entered, one step apart, and nothing
+    // returns to the room level afterwards.
+    expect(atRoomLevel).toHaveLength(2);
+    expect(visited[atRoomLevel[0] ?? -1]).toEqual(enterRoom(ROOM));
+    expect(visited[atRoomLevel[1] ?? -1]).toEqual(enterRoom(OTHER_ROOM));
+    expect((atRoomLevel[1] ?? -1) - (atRoomLevel[0] ?? -1)).toBe(1);
+    expect(visited.at(-1)).toEqual(to);
+  });
+
+  it('property: folding eventsTo(from, to) through transition reaches to, across rooms', () => {
+    fc.assert(
+      fc.property(anyState, anyState, (from, to) => {
+        const route = eventsTo(from, to);
+
+        const reached = route.reduce((state, event) => transition(state, event), from);
+
+        expect(reached).toEqual(to);
+      }),
+      { numRuns: 1000 }
+    );
   });
 });
 
@@ -544,6 +671,18 @@ describe('the address a state names', () => {
     expect(
       addressOf(atBookAddress({ room: ROOM, wall: 3, shelf: 4, volume: 31 }))
     ).toEqual({ room: ROOM, wall: 3, shelf: 4, volume: 31, page: 0 });
+  });
+
+  it('round-trips a page address through the state that holds it', () => {
+    const address = { room: OTHER_ROOM, wall: 3, shelf: 4, volume: 31, page: PAGE };
+
+    expect(addressOf(atPageAddress(address))).toEqual(address);
+  });
+
+  it('refuses a page address past the end of the library, through core', () => {
+    expect(() =>
+      atPageAddress({ room: ROOM_COUNT - 1n, wall: 3, shelf: 4, volume: 30, page: 0 })
+    ).toThrow(AddressBeyondLibraryError);
   });
 });
 

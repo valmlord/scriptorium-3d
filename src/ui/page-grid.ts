@@ -14,9 +14,10 @@ import { UnexpectedPageLengthError } from './errors';
  * the monospace stack in `./reader.css` is part of this decision and not a
  * style detail: in a proportional font these 80 lines are 80 ragged rows.
  *
- * Pure, and in its own module for that reason: the layout of a page is
- * arithmetic over a string and is unit-tested directly, where everything else
- * in this layer needs a browser (`docs/testing.md` §1).
+ * Pure, and in its own module for that reason: the layout of a page, and of
+ * the phrase a search marks in it, is arithmetic over a string and is
+ * unit-tested directly, where the reader that writes it to the DOM needs a
+ * browser (`docs/testing.md` §1).
  */
 
 /** Characters across one line of the grid. */
@@ -41,4 +42,63 @@ export function pageLines(text: string): readonly string[] {
     lines.push(text.slice(row * READER_COLUMNS, (row + 1) * READER_COLUMNS));
   }
   return lines;
+}
+
+/**
+ * The characters of a page to mark: `length` of them from `offset`.
+ *
+ * `offset` is the hit's code-point index into the page and also its UTF-16
+ * index, because every alphabet symbol is one unit; `length` is the accepted
+ * query's code-point length, not the raw input's, so a U+0451 typed decomposed,
+ * as U+0435 and U+0308, is one character marked.
+ */
+export interface HighlightRange {
+  readonly offset: number;
+  readonly length: number;
+}
+
+/** A run of one line's characters, marked or not. */
+export interface LineSegment {
+  readonly text: string;
+  readonly isMarked: boolean;
+}
+
+/**
+ * Cut `text` into the grid's lines as `pageLines` does, each line split into
+ * the runs inside and outside `range`.
+ *
+ * A line is at most three segments, before, inside and after, and a segment is
+ * never empty, so a line the range does not touch is one unmarked segment. A
+ * range spanning lines is cut at each line's edge, which is what lets the
+ * reader keep one element per line and mark the phrase with an element per
+ * line it crosses rather than one per character.
+ */
+export function highlightedLines(
+  text: string,
+  range: HighlightRange | null
+): readonly (readonly LineSegment[])[] {
+  return pageLines(text).map((line, row) => {
+    if (range === null) {
+      return [{ text: line, isMarked: false }];
+    }
+    const lineStart = row * READER_COLUMNS;
+    // The range in this line's own columns, clamped to the line.
+    const from = clamp(range.offset - lineStart);
+    const to = clamp(range.offset + range.length - lineStart);
+    const segments: LineSegment[] = [];
+    pushSegment(segments, line.slice(0, from), false);
+    pushSegment(segments, line.slice(from, to), true);
+    pushSegment(segments, line.slice(Math.max(from, to)), false);
+    return segments;
+  });
+}
+
+function clamp(column: number): number {
+  return Math.min(Math.max(column, 0), READER_COLUMNS);
+}
+
+function pushSegment(segments: LineSegment[], text: string, isMarked: boolean): void {
+  if (text !== '') {
+    segments.push({ text, isMarked });
+  }
 }

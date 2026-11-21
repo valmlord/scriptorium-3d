@@ -1,10 +1,6 @@
 import { assertValidAddress } from '@core/address';
 import type { Address, BookAddress } from '@core/address';
-import {
-  IllegalTransitionError,
-  NonIntegerComponentError,
-  RoomChangeUnsupportedError,
-} from './errors';
+import { IllegalTransitionError, NonIntegerComponentError } from './errors';
 
 /**
  * The navigation finite state machine: the single source of truth for where
@@ -14,11 +10,11 @@ import {
  * Four levels, one ladder:
  *
  *     room  --select-wall-->  wall  --select-shelf-->  shelf  --select-volume-->  book
- *           <----back-------        <----back--------         <----back---------   |
- *                                                                   turn-page  <---+
+ *     |  ^  <----back-------        <----back--------         <----back---------   |
+ *     +--+ enter-room                                               turn-page  <---+
  *
- * **The ladder is the whole of it, deliberately.** There is no sideways move —
- * no choosing another wall while standing at a wall — because a level is a
+ * **The ladder is the whole of it, deliberately.** Below the room there is no
+ * sideways move — no choosing another wall while standing at a wall — because a level is a
  * camera distance and a sideways move is `back` followed by a descent. Writing
  * it as its own transition would mean a timeline between every pair of
  * siblings, which is the combinatorial growth ADR-0004 exists to prevent;
@@ -32,11 +28,11 @@ import {
  * lags behind it, exactly as the camera lags behind a descent (ADR-0030,
  * ADR-0032).
  *
- * **Transitions are explicit and total.** Every one of the twenty
+ * **Transitions are explicit and total.** Every one of the twenty-four
  * `(level, event)` pairs is either in the table below or raises
  * `IllegalTransitionError` — never silently ignored, because an event that
  * changes nothing and reports nothing is indistinguishable from one the user
- * never made. `__tests__/navigation.test.ts` asserts all twenty.
+ * never made. `__tests__/navigation.test.ts` asserts all twenty-four.
  *
  * **`core` is reached here at runtime**, for `assertValidAddress`. That is the
  * address model — integer range arithmetic over components, with no hashing in
@@ -44,11 +40,13 @@ import {
  * dropped frame ADR-0005 exists to avoid, and page text reaches `state`
  * through the worker client or not at all.
  *
- * **The room is fixed for the lifetime of a `Navigation`.** Changing rooms is
- * a cut rather than a flight — through a corridor (M9) or a deep link (M8) —
- * and it gets its own transition in the milestone that can show it. Until
- * then, asking for a route into another room is refused by name rather than
- * silently resolved in the room you are in.
+ * **Changing rooms is `enter-room`, and it is legal at the room level only.**
+ * A room is the top of the ladder, so moving to another one is a sideways move
+ * between two tops: the camera climbs to the room vantage of the room on
+ * screen, the room is swapped there, and the camera descends in the new one
+ * (`@app/choreography`). Legal anywhere else, it would be a sideways move at
+ * every level, which is the combinatorial growth the ladder exists to avoid;
+ * `eventsTo` composes the climb, the change and the descent instead.
  */
 
 /**
@@ -70,6 +68,7 @@ export const NAVIGATION_EVENT_TYPES = [
   'select-volume',
   'turn-page',
   'back',
+  'enter-room',
 ] as const;
 
 /** The type tag of a navigation event. */
@@ -112,22 +111,23 @@ export type NavigationEvent =
    * what makes an interrupted turn answerable at all (ADR-0032).
    */
   | { readonly type: 'turn-page'; readonly page: number }
-  | { readonly type: 'back' };
+  | { readonly type: 'back' }
+  | { readonly type: 'enter-room'; readonly room: bigint };
 
 /**
  * The transition table, as data.
  *
  * It is what `isLegalTransition` answers and what an `IllegalTransitionError`
  * names, while `transition` below does the construction. The two halves are
- * held together by the exhaustive test rather than by care: for all twenty
- * pairs, this table and whether `transition` throws must agree. Deleting an
+ * held together by the exhaustive test rather than by care: for all
+ * twenty-four pairs, this table and whether `transition` throws must agree. Deleting an
  * entry here therefore turns a named test red, and so does deleting the branch
  * that builds the state.
  */
 const LEGAL_EVENT_TYPES: Readonly<
   Record<NavigationLevel, readonly NavigationEventType[]>
 > = {
-  room: ['select-wall'],
+  room: ['select-wall', 'enter-room'],
   wall: ['select-shelf', 'back'],
   shelf: ['select-volume', 'back'],
   book: ['turn-page', 'back'],
@@ -178,6 +178,9 @@ export function transition(
       if (event.type === 'select-wall') {
         return atWall(state.room, event.wall);
       }
+      if (event.type === 'enter-room') {
+        return enterRoom(event.room);
+      }
       break;
     case 'wall':
       if (event.type === 'select-shelf') {
@@ -213,7 +216,9 @@ export function transition(
 
 /**
  * The events that walk the machine from `from` to `to`: `back` until the two
- * share an ancestor, then one descent per level.
+ * share an ancestor, then one descent per level. Between two rooms the shared
+ * ancestor is never inside either, so the route climbs to the room level,
+ * changes rooms there and descends the whole of `to`.
  *
  * This is what makes a single click on a spine one gesture — and, because the
  * flight plays a whole retarget as one movement, one continuous flight — while
@@ -226,7 +231,7 @@ export function eventsTo(
   to: NavigationState
 ): readonly NavigationEvent[] {
   if (from.room !== to.room) {
-    throw new RoomChangeUnsupportedError(from.room, to.room);
+    return eventsAcrossRooms(from, to);
   }
 
   const events: NavigationEvent[] = [];
@@ -241,6 +246,33 @@ export function eventsTo(
   for (const event of descentFrom(cursor, to)) {
     events.push(event);
     cursor = transition(cursor, event);
+  }
+  return events;
+}
+
+/**
+ * The route between states in two different rooms: up to the room level, the
+ * change of room, and the full descent of `to` from its own room's top.
+ *
+ * A branch of its own because `isAncestorOf` compares the components below the
+ * room and nothing else, which is what makes the room level an ancestor of
+ * everything. Left to the general rule, two books with the same wall, shelf
+ * and volume in different rooms would be each other's ancestor, and the route
+ * between them would collapse to a page turn in the wrong room.
+ */
+function eventsAcrossRooms(
+  from: NavigationState,
+  to: NavigationState
+): readonly NavigationEvent[] {
+  const events: NavigationEvent[] = [];
+  let cursor = from;
+  while (cursor.level !== 'room') {
+    events.push({ type: 'back' });
+    cursor = transition(cursor, { type: 'back' });
+  }
+  events.push({ type: 'enter-room', room: to.room });
+  for (const event of descentFrom(enterRoom(to.room), to)) {
+    events.push(event);
   }
   return events;
 }
@@ -268,6 +300,17 @@ export function bookAddressOf(state: NavigationState): BookAddress | null {
 /** The state of the book at `address`, open at its first page (SPEC §6). */
 export function atBookAddress(address: BookAddress): NavigationState {
   return atBook(address.room, address.wall, address.shelf, address.volume, ENTRY_PAGE);
+}
+
+/** The state of the book at `address`, open at the page `address` names. */
+export function atPageAddress(address: Address): NavigationState {
+  return atBook(
+    address.room,
+    address.wall,
+    address.shelf,
+    address.volume,
+    address.page
+  );
 }
 
 /** A listener notified after the state has changed. */
@@ -333,9 +376,10 @@ export function createNavigation(room: bigint): Navigation {
 
 /**
  * The components a state names below the room, in ladder order: one number per
- * level it has descended. The room itself is not in the list — the rooms are
- * known to agree before this is used — so the list is empty at the room level
- * and three long at a book.
+ * level it has descended. The room itself is not in the list — `eventsTo`
+ * routes between rooms on its own branch, so the rooms are known to agree
+ * before this is used — and the list is empty at the room level and three long
+ * at a book.
  */
 function componentsOf(state: NavigationState): readonly number[] {
   const components: number[] = [];

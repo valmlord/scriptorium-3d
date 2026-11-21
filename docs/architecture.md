@@ -52,9 +52,11 @@ not reach `toLinear` on a five-field address or a constant naming how many volum
 The import rules are enforced in the ESLint config. **All seven layer directories have a block there, and
 so does the composition root** — a layer with no block is a boundary that reads as enforced and is not,
 which is what ADR-0029 found in `state`, in `app` and in `src/main.ts`. `src/__tests__/` has no block on
-purpose: those four files are the suite's own meta-tests and belong to no layer. One of them imports
-`@core/prf` to name `DOMAIN_TAG`, because what it asserts is which thread that surface is shipped on
-(ADR-0032). The lint rules are the
+purpose: it holds the checks and helpers about the repository as a whole, which belong to no layer. The
+production-bundle test imports `@core/prf` to name `DOMAIN_TAG`, because what it asserts is which thread
+that surface is shipped on (ADR-0032). A layer's tests may import a helper from there by relative path, and
+a helper there imports nothing but Node built-ins, so the directory never relays a layer import around a
+lint block; that is this paragraph's rule, and no lint block enforces it. The lint rules are the
 specification; the table above is their explanation.
 
 `no-restricted-imports` matches the static import forms of every row. **`core`'s split alone has a second
@@ -97,6 +99,13 @@ stays silent. A lint rule nobody has watched fail is not a rule.
   a `new THREE.Vector3()` per frame at 60 fps is 3600 objects a minute handed to the GC.
 - Anything above ~1 ms of computation belongs in the worker, not the frame.
 
+**Note, 2026-11-21: one recorded exception (ADR-0034).** A change of room is swapped inside the
+`setAnimationLoop` callback, in the frame in which the camera settles at the room stop. That frame runs
+`createRoom`, every geometry, material and instance buffer of a room at 1.6 to 1.9 ms median, and the
+title resolver's `refresh()`, which fans a shelf out over 32 cache reads. Both allocate, and the first
+is over the ~1 ms line. Neither can move: three.js objects can only be built on the thread that owns
+the context, and a room is built once per swap, not once per frame.
+
 ## 3. The scene
 
 - Books are **instanced**. 640 spines to a room is one `InstancedMesh` and one draw call, never 640 meshes.
@@ -108,6 +117,13 @@ stays silent. A lint rule nobody has watched fail is not a rule.
 - Level of detail decides what is generated, not merely what is drawn: titles are resolved when the camera
   is close enough to read them and cancelled when it is not.
 
+**Note, 2026-11-21: "disposed when a room is unloaded" now means "by the retirement policy"
+(ADR-0034).** A replaced room leaves the scene at once, but its textures and geometries are disposed by
+`engine/retirement.ts`, because disposing them before the new room has rendered frees shader programs
+the new room is about to link again. A room that has rendered with titles is disposed no later than the
+loaded room's first titled render; one that has not, no later than the first render after it was
+replaced. At most one room is kept.
+
 ## 4. State
 
 - The navigation FSM in `state/` is the single source of truth for where the user is. The camera, the URL
@@ -118,6 +134,12 @@ stays silent. A lint rule nobody has watched fail is not a rule.
   camera (SPEC §6). Turning is interruptible, and it is interruptible by ADR-0030's rules with the DOM in
   the place of the camera rig rather than by a second model of its own (ADR-0032).
 - The URL is written from the FSM and parsed into it. No other code touches `location`.
+
+**Note, 2026-11-21: rooms change by `enter-room` (ADR-0034).** The machine leaves its room through an
+`enter-room` event, legal at the room level only, and `eventsTo` routes between rooms as `back` to the
+room level, `enter-room`, then the descent. The room on screen is a projection like the camera: the
+viewer holds it, and the choreography changes it only when the camera has settled at the room stop, so
+during that retreat the machine already names the new room and the screen still shows the old one.
 
 ## 5. Determinism
 

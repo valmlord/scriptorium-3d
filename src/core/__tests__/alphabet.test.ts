@@ -10,6 +10,7 @@ import {
   normalize,
 } from '../alphabet';
 import './fast-check-setup';
+import { propertyRuns } from './property-runs';
 
 describe('PAGE_ALPHABET', () => {
   it('has exactly 36 symbols', () => {
@@ -122,16 +123,88 @@ describe('normalize', () => {
     expect(result.unknown).toHaveLength(0);
   });
 
-  it('collapses any whitespace run to a single space', () => {
+  it('keeps a run of spaces and reports the line feed and tab beside it as unknown', () => {
+    // ADR-0035: a space is symbol 0, so the three spaces are three symbols,
+    // and the line feed and tab are characters outside the alphabet, not
+    // spaces spelled differently.
     const result = normalize('привет   мир\n\t там');
-    expect(result.text).toBe('привет мир там');
-    expect(result.unknown).toHaveLength(0);
+
+    expect(result.text).toBe('привет   мир там');
+    expect(result.unknown).toEqual([
+      { symbol: '\n', index: 12 },
+      { symbol: '\t', index: 13 },
+    ]);
   });
-  it('collapses leading and trailing whitespace to a single space', () => {
-    const result = normalize('  привет  ');
-    expect(result.text).toBe(' привет ');
+
+  it('a run of spaces is kept exactly as typed, leading and trailing runs included', () => {
+    // A trimmed or collapsed run sends an exact page to another address:
+    // 364 of 400 measured pages contain a double space (ADR-0035).
+    const typed = '  привет    мир   ';
+
+    const result = normalize(typed);
+
+    expect(result.text).toBe(typed);
     expect(result.unknown).toHaveLength(0);
+    expect(normalize('     ').text).toBe('     ');
   });
+
+  it('a tab is reported as unknown with its position, not converted to a space', () => {
+    const result = normalize('а\tб');
+
+    expect(result.text).toBe('аб');
+    expect(result.unknown).toEqual([{ symbol: '\t', index: 1 }]);
+  });
+
+  it('U+00A0 is reported as unknown with its position, not converted to a space', () => {
+    const result = normalize('привет\u00A0мир');
+
+    expect(result.text).toBe('приветмир');
+    expect(result.unknown).toEqual([{ symbol: '\u00A0', index: 6 }]);
+  });
+
+  it('a line feed and a carriage return are reported as unknown with their positions', () => {
+    const result = normalize('а\r\nб\nв');
+
+    expect(result.text).toBe('абв');
+    expect(result.unknown).toEqual([
+      { symbol: '\r', index: 1 },
+      { symbol: '\n', index: 2 },
+      { symbol: '\n', index: 4 },
+    ]);
+  });
+
+  // The rest of what `\s` matches, which is what a whitespace-to-space
+  // conversion would reach for. U+2002 stands in for U+2000 and U+2003 for
+  // U+2001: NFC maps each of those two onto its stand-in, so the symbol
+  // reported would not be the one written here.
+  it.each(
+    [
+      '\u000B',
+      '\u000C',
+      '\u1680',
+      '\u2002',
+      '\u2003',
+      '\u200A',
+      '\u2028',
+      '\u2029',
+      '\u202F',
+      '\u205F',
+      '\u3000',
+      '\uFEFF',
+    ].map((space) => ({
+      space,
+      codePoint: `U+${(space.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, '0')}`,
+    }))
+  )(
+    'whitespace $codePoint is reported as unknown, not converted to a space',
+    ({ space }) => {
+      const result = normalize(`а${space}б`);
+
+      expect(result.text).toBe('аб');
+      expect(result.unknown).toEqual([{ symbol: space, index: 1 }]);
+    }
+  );
+
   it('reports Latin homoglyphs with their positions instead of substituting', () => {
     const result = normalize('привет x мир');
     expect(result.text).toBe('привет  мир');
@@ -246,6 +319,20 @@ describe('normalize', () => {
     const result = normalize('\u0435\u0308?');
     expect(result.text).toBe('ё');
     expect(result.unknown).toEqual([{ symbol: '?', index: 2 }]);
+  });
+
+  it('property: normalize is the identity on every string over the alphabet', () => {
+    fc.assert(
+      fc.property(
+        fc
+          .array(fc.constantFrom(...PAGE_ALPHABET.symbols))
+          .map((chars) => chars.join('')),
+        (text) => {
+          expect(normalize(text)).toEqual({ text, unknown: [] });
+        }
+      ),
+      { numRuns: propertyRuns(1000) }
+    );
   });
 
   it('is invariant under NFD for generated alphabet text', () => {

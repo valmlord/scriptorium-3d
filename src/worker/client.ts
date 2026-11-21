@@ -1,5 +1,8 @@
 import { BOOKS_PER_SHELF, LIBRARY_SIZE, PAGE_LENGTH, fromLinear } from '@core/address';
 import type { Address, BookAddress } from '@core/address';
+// Type only: a runtime import of `@core/library` would put the generation
+// surface on the main thread, which `production-bundle.test.ts` refuses.
+import type { PadMode } from '@core/library';
 import { GenerationCache } from './cache';
 import {
   CancelledRequestError,
@@ -10,7 +13,12 @@ import {
   WorkerFailureError,
 } from './errors';
 import { FIRST_REQUEST_ID } from './protocol';
-import type { CancelRequest, ProtocolRequest, RequestId } from './protocol';
+import type {
+  CancelRequest,
+  FoundResponse,
+  ProtocolRequest,
+  RequestId,
+} from './protocol';
 import { parseProtocolResponse } from './response';
 import type { IncomingResponse } from './response';
 
@@ -135,8 +143,14 @@ export interface GenerationWorkerLike {
  */
 export const WARM_UP_ADDRESS: Address = fromLinear(LIBRARY_SIZE / 2n);
 
-/** The result responses: the three that carry what a caller asked for. */
-type ResultResponse = Extract<IncomingResponse, { kind: 'page' | 'title' | 'located' }>;
+/** The result responses: the four that carry what a caller asked for. */
+type ResultResponse = Extract<
+  IncomingResponse,
+  { kind: 'page' | 'title' | 'located' | 'found' }
+>;
+
+/** Where a search placed its query: the page's address and the starting offset. */
+type FoundQuery = Pick<FoundResponse, 'address' | 'offset'>;
 
 /** A result pulled out of a response, or why it could not be. */
 type Taken<T> =
@@ -293,6 +307,27 @@ export class GenerationClient {
    */
   locate(page: string): GenerationRequest<Address> {
     const issued = this.issue((id) => ({ kind: 'locate', id, page }), takeLocated);
+    return this.handle([issued.id], issued.result);
+  }
+
+  /**
+   * A page holding `query`, padded under `mode`, and where in it the query
+   * starts (SPEC §5, ADR-0033).
+   *
+   * `core`'s `search` runs whole in the worker, which also chooses the offset
+   * and the padding's random bytes, so the protocol carries no offset at all.
+   * The query is sent as given: normalizing and refusing it is the caller's
+   * (SPEC §2), and `core` refuses it again on the other side.
+   *
+   * Never cached, and not for `locate`'s reason alone (ADR-0026). Two searches
+   * for the same text are two searches with two random offsets, and in
+   * `random` mode two random paddings: a cached answer would be a wrong one.
+   */
+  search(query: string, mode: PadMode): GenerationRequest<FoundQuery> {
+    const issued = this.issue(
+      (id) => ({ kind: 'search', id, query, mode }),
+      (response) => takeFound(response, query)
+    );
     return this.handle([issued.id], issued.result);
   }
 
@@ -472,6 +507,7 @@ export class GenerationClient {
       case 'page':
       case 'title':
       case 'located':
+      case 'found':
         pending.fulfil(response);
         return;
       case 'dropped':
@@ -631,6 +667,40 @@ function takeLocated(response: ResultResponse): Taken<Address> {
     return wrongKind('located', response.kind);
   }
   return { ok: true, value: response.address };
+}
+
+/**
+ * Take a search hit, refusing an offset the query it answers cannot have.
+ *
+ * `response.ts` narrows the offset to a number and no further, because the
+ * bound belongs to the request: a query of `n` code points starts at an integer
+ * from `0` to `PAGE_LENGTH - n`, and only this side still holds the query. A
+ * skewed worker answering past that bound would have the reader mark a range
+ * running off the end of the page, so it is refused here with the bound and
+ * the offset it broke.
+ */
+function takeFound(response: ResultResponse, query: string): Taken<FoundQuery> {
+  if (response.kind !== 'found') {
+    return wrongKind('found', response.kind);
+  }
+  const queryLength = Array.from(query).length;
+  const lastOffset = PAGE_LENGTH - queryLength;
+  // No offset applies to a query longer than a page, so no range is printed
+  // for one: "from 0 to -1" would be a bound that cannot apply.
+  if (lastOffset < 0) {
+    return {
+      ok: false,
+      detail: `a hit for a query of ${String(queryLength)} code points, and a page holds ${String(PAGE_LENGTH)}`,
+    };
+  }
+  const { offset } = response;
+  if (!Number.isInteger(offset) || offset < 0 || offset > lastOffset) {
+    return {
+      ok: false,
+      detail: `an offset of ${String(offset)}, and a query of ${String(queryLength)} code points starts at an integer from 0 to ${String(lastOffset)}`,
+    };
+  }
+  return { ok: true, value: { address: response.address, offset } };
 }
 
 /**

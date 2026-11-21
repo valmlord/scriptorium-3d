@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { advanceMotionClockBy } from '@motion/clock';
 import {
   FlightOriginMismatchError,
@@ -102,8 +102,13 @@ afterEach(() => {
   }
 });
 
-function flightFromRoom(): Flight {
-  const flight = createFlight(ORIGIN);
+/**
+ * A flight from the room. It is flown unless `cut` says otherwise, and `cut`
+ * is the test's own getter so that a test can change its answer between two
+ * flights.
+ */
+function flightFromRoom(cut: () => boolean = () => false): Flight {
+  const flight = createFlight(ORIGIN, { cut });
   flights.push(flight);
   return flight;
 }
@@ -493,6 +498,64 @@ describe('waiting for a flight to settle', () => {
     flight.dispose();
 
     await expect(waiting).resolves.toBeUndefined();
+  });
+});
+
+describe('a cut flight', () => {
+  it('a cut flight arrives in the same call and the rig only ever holds the start or the end pose', async () => {
+    const flight = flightFromRoom(() => true);
+    expectRigAt(flight.rig, ROOM_POSE);
+
+    flight.flyTo(ROUTE, 'book');
+
+    expect(flight.isSettled).toBe(true);
+    expect(flight.timeline.time()).toBeCloseTo(4, 9);
+    expectRigAt(flight.rig, BOOK_POSE);
+    await expect(flight.whenSettled()).resolves.toBeUndefined();
+    // Nothing is left running that a later frame could move the rig with.
+    for (let frame = 0; frame < 120; frame += 1) {
+      advanceMotionClockBy(FRAME_SECONDS);
+      expectRigAt(flight.rig, BOOK_POSE);
+    }
+  });
+
+  it('a cut retreat and descent ends at the wanted label', () => {
+    const flight = flightFromRoom(() => true);
+    flight.flyTo(ROUTE, 'book');
+    const wallLeg = flight.timeline.getChildren(false)[0];
+    const seek = vi.spyOn(flight.timeline, 'seek');
+
+    flight.flyTo(OTHER_ROUTE, 'shelf');
+
+    // Back to the wall the two routes share, then down to the new shelf: the
+    // retreat of ADR-0030's rule 4 comes first even with no time in it, which
+    // is what lets the shelf below the wall be replaced at all.
+    expect(seek.mock.calls.map(([position]) => position)).toEqual([2, 3]);
+    expect(flight.isSettled).toBe(true);
+    expect(flight.targetLabel).toBe('shelf');
+    expect(flight.timeline.labels).toEqual({ room: 0, wall: 2, shelf: 3 });
+    expect(flight.timeline.getChildren(false)[0]).toBe(wallLeg);
+    expectRigAt(flight.rig, OTHER_SHELF_POSE);
+  });
+
+  it('cut is asked per flight', () => {
+    let isCut = false;
+    const flight = flightFromRoom(() => isCut);
+    flight.flyTo(ROUTE, 'book');
+    advanceMotionClockBy(1);
+    // The first flight is flown: a second in, it is part of the way along.
+    expect(flight.isSettled).toBe(false);
+    expect(flight.timeline.time()).toBeGreaterThan(0);
+
+    isCut = true;
+    flight.flyTo(ROUTE, 'book');
+
+    // The second goes where the first was already going, and arrives at once
+    // rather than being left to the tween that was on its way there.
+    expect(flight.isSettled).toBe(true);
+    expectRigAt(flight.rig, BOOK_POSE);
+    advanceMotionClockBy(1);
+    expectRigAt(flight.rig, BOOK_POSE);
   });
 });
 

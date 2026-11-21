@@ -4,10 +4,10 @@ import { ROOM_POSE, bookPose, flightRouteTo, shelfPose, wallPose } from '@engine
 import { motionClockSeconds } from '@motion/clock';
 import { RIG_FIELDS } from '@motion/rig';
 import type { CameraPose, CameraRigSnapshot } from '@motion/rig';
-import { RoomChangeUnsupportedError } from '@state/errors';
 import type { NavigationState } from '@state/navigation';
 import { createChoreography } from '@app/choreography';
 import type { Choreography } from '@app/choreography';
+import { whenAllIdle } from '@app/idle';
 
 /**
  * M5's behaviour end to end, with no WebGL context and no DOM: the navigation
@@ -19,16 +19,36 @@ import type { Choreography } from '@app/choreography';
  *
  * Frames are handed to `frame()` as explicit timestamps, a sixtieth of a
  * second apart, so nothing here waits for anything.
+ *
+ * The viewer is stood in for by a screen that shows whatever it was last asked
+ * to show, which is the whole of what the choreography may assume of it.
  */
 
 const ROOM = 0n;
+const OTHER_ROOM = 37n;
 const TARGET: BookAddress = { room: ROOM, wall: 1, shelf: 2, volume: 3 };
+
+/** The same wall, shelf and volume in another room. */
+const ELSEWHERE: BookAddress = { ...TARGET, room: OTHER_ROOM };
 
 /** A sixtieth of a second, as a frame would arrive. */
 const FRAME_SECONDS = 1 / 60;
 
 /** Enough frames for any flight in this file, and a cap rather than a wait. */
 const MAX_FRAMES = 2000;
+
+/**
+ * The frames a descent from the room level is given to settle in the waiting
+ * tests: a cap, not a wait. It takes 187 from the room level.
+ */
+const MAX_DESCENT_FRAMES = 600;
+
+/**
+ * How many microtasks the spin tests let pass while the rooms disagree. A
+ * waiter looping over a resolved promise reads the room on screen once per
+ * turn, so it shows up here as about a thousand reads.
+ */
+const SPIN_MICROTASKS = 1000;
 
 const built: Choreography[] = [];
 
@@ -38,10 +58,44 @@ afterEach(() => {
   }
 });
 
-function choreographyInRoom(): Choreography {
-  const choreography = createChoreography(ROOM);
+/** A choreography, and what it asked of the screen standing in for the viewer. */
+interface OnScreen {
+  readonly choreography: Choreography;
+  /** Every room `showRoom` was called with, in order. */
+  readonly swaps: readonly bigint[];
+  /** The rig at the moment of each swap. */
+  readonly rigsAtSwaps: readonly CameraRigSnapshot[];
+  /** How many times the room on screen has been read. */
+  readonly shownRoomReads: () => number;
+}
+
+/**
+ * `prefersReducedMotion` is the test's own getter, so a test can change its
+ * answer between two events; by default every flight is flown.
+ */
+function onScreen(prefersReducedMotion: () => boolean = () => false): OnScreen {
+  let shown = ROOM;
+  let reads = 0;
+  const swaps: bigint[] = [];
+  const rigsAtSwaps: CameraRigSnapshot[] = [];
+  const choreography = createChoreography(ROOM, {
+    shownRoom: () => {
+      reads += 1;
+      return shown;
+    },
+    showRoom: (room) => {
+      swaps.push(room);
+      rigsAtSwaps.push(choreography.rig());
+      shown = room;
+    },
+    prefersReducedMotion,
+  });
   built.push(choreography);
-  return choreography;
+  return { choreography, swaps, rigsAtSwaps, shownRoomReads: () => reads };
+}
+
+function choreographyInRoom(): Choreography {
+  return onScreen().choreography;
 }
 
 /** One frame, at the next timestamp the render loop would report. */
@@ -80,10 +134,42 @@ function isNonDecreasing(values: readonly number[]): boolean {
   );
 }
 
-function expectRigAt(rig: CameraRigSnapshot, pose: CameraPose): void {
+function expectRigAt(rig: CameraRigSnapshot | undefined, pose: CameraPose): void {
+  expect(rig).toBeDefined();
   for (const field of RIG_FIELDS) {
-    expect(rig[field], `rig.${field}`).toBeCloseTo(pose[field], 6);
+    expect(rig?.[field], `rig.${field}`).toBeCloseTo(pose[field], 6);
   }
+}
+
+/** Frames until the camera has arrived, capped at a descent's worth. */
+function settleDescent(choreography: Choreography): void {
+  for (
+    let frame = 0;
+    frame < MAX_DESCENT_FRAMES && !choreography.isIdle();
+    frame += 1
+  ) {
+    tick(choreography);
+  }
+}
+
+async function flushMicrotasks(count: number): Promise<void> {
+  for (let turn = 0; turn < count; turn += 1) {
+    await Promise.resolve();
+  }
+}
+
+/**
+ * Whether `promise` has resolved, after draining the microtask queue. Five
+ * turns, as in `idle.test.ts`, so a waiter released a turn or two late does not
+ * read as one never released.
+ */
+async function hasSettled(promise: Promise<unknown>): Promise<boolean> {
+  let settled = false;
+  void promise.then(() => {
+    settled = true;
+  });
+  await flushMicrotasks(5);
+  return settled;
 }
 
 describe('a choreography in a room', () => {
@@ -164,14 +250,186 @@ describe('choosing a volume', () => {
     // than three that touch.
     expect(isNonDecreasing(samples.map((rig) => rig.radial))).toBe(true);
   });
+});
 
-  it('refuses a volume in another room, naming both rooms', () => {
-    const choreography = choreographyInRoom();
+describe('changing rooms', () => {
+  it('a cross-room flight swaps the room once, at a frame where the rig is the room pose', () => {
+    const { choreography, swaps, rigsAtSwaps } = onScreen();
+    choreography.openVolume(TARGET);
+    flyOn(choreography);
 
-    expect(() => {
-      choreography.openVolume({ ...TARGET, room: 37n });
-    }).toThrow(RoomChangeUnsupportedError);
-    expect(choreography.state).toEqual({ level: 'room', room: ROOM });
+    choreography.openVolume(ELSEWHERE);
+    flyOn(choreography);
+
+    // The room pose is the one both rooms share, so a swap there is the one
+    // swap nobody sees.
+    expect(swaps).toEqual([OTHER_ROOM]);
+    expectRigAt(rigsAtSwaps[0], ROOM_POSE);
+    expect(choreography.state).toEqual({ level: 'book', ...ELSEWHERE, page: 0 });
+    expectRigAt(
+      choreography.rig(),
+      bookPose(ELSEWHERE.wall, ELSEWHERE.shelf, ELSEWHERE.volume)
+    );
+  });
+
+  it('a search back to the shown room before the swap swaps nothing', () => {
+    const { choreography, swaps } = onScreen();
+    choreography.openVolume(TARGET);
+    flyOn(choreography);
+    choreography.openVolume(ELSEWHERE);
+    for (let frame = 0; frame < 20; frame += 1) {
+      tick(choreography);
+    }
+    expect(swaps).toEqual([]);
+    const backHome: BookAddress = { ...TARGET, volume: 9 };
+
+    choreography.openVolume(backHome);
+    flyOn(choreography);
+
+    expect(swaps).toEqual([]);
+    expectRigAt(
+      choreography.rig(),
+      bookPose(backHome.wall, backHome.shelf, backHome.volume)
+    );
+  });
+
+  it('the choreography is not idle while the machine’s room is not the room on screen', () => {
+    const { choreography } = onScreen();
+
+    // From the room level the retreat has nowhere to go, so the flight is
+    // settled already and only the rooms say there is work left.
+    choreography.openVolume(ELSEWHERE);
+
+    expect(choreography.isIdle()).toBe(false);
+  });
+
+  it('the descent starts in the frame the retreat ended in', () => {
+    const { choreography, swaps } = onScreen();
+    choreography.openVolume(TARGET);
+    flyOn(choreography);
+    choreography.openVolume(ELSEWHERE);
+
+    let frames = 0;
+    while (swaps.length === 0) {
+      tick(choreography);
+      frames += 1;
+      expect(frames).toBeLessThan(MAX_FRAMES);
+    }
+    const atSwap = choreography.rig();
+    expectRigAt(atSwap, ROOM_POSE);
+    // Already flying when the swap frame ends, rather than settled at the room
+    // pose waiting for a later frame to start the descent.
+    expect(choreography.isIdle()).toBe(false);
+
+    tick(choreography);
+
+    // The ease starts from rest, so the first frame moves the rig by about a
+    // millionth: compared with the rig the swap frame left, not with the pose,
+    // which the retreat reaches only to within that.
+    expect(distanceToPose(choreography.rig(), atSwap)).toBeGreaterThan(0);
+  });
+});
+
+describe('waiting across a change of room', () => {
+  it('whenIdle does not spin while the rooms disagree', async () => {
+    const { choreography, shownRoomReads } = onScreen();
+    choreography.openVolume(ELSEWHERE);
+    const waiting = choreography.whenIdle();
+
+    await flushMicrotasks(SPIN_MICROTASKS);
+    // Captured before the frame, which reads the room on screen itself.
+    const readsWhileDisagreeing = shownRoomReads();
+    // And the frame runs before anything is asserted: its swap is what stops
+    // a spinning waiter, so an assertion failing first would leave the loop
+    // spinning and the run hung rather than red.
+    tick(choreography);
+
+    expect(readsWhileDisagreeing).toBeLessThanOrEqual(5);
+    settleDescent(choreography);
+    expect(await hasSettled(waiting)).toBe(true);
+  });
+
+  it('whenIdle does not spin while the rooms disagree, and under a cut has resolved after the next frame', async () => {
+    const { choreography, shownRoomReads } = onScreen(() => true);
+    choreography.openVolume(ELSEWHERE);
+    const waiting = choreography.whenIdle();
+
+    await flushMicrotasks(SPIN_MICROTASKS);
+    const readsWhileDisagreeing = shownRoomReads();
+    // The frame first, for the reason above.
+    tick(choreography);
+
+    expect(readsWhileDisagreeing).toBeLessThanOrEqual(5);
+    // The swap and the descent are both in that one frame: nothing is left to
+    // fly, so no further frame is needed for the wait to end.
+    expect(await hasSettled(waiting)).toBe(true);
+  });
+
+  it('whenIdle resolves when the rooms agree again without a swap', async () => {
+    const { choreography, swaps } = onScreen();
+    choreography.openVolume(ELSEWHERE);
+    const waiting = choreography.whenIdle();
+    expect(await hasSettled(waiting)).toBe(false);
+
+    choreography.openVolume(TARGET);
+    settleDescent(choreography);
+
+    expect(await hasSettled(waiting)).toBe(true);
+    expect(swaps).toEqual([]);
+  });
+
+  it('whenIdle resolves after dispose, with the rooms disagreeing', async () => {
+    const { choreography } = onScreen();
+    choreography.openVolume(ELSEWHERE);
+    const waiting = choreography.whenIdle();
+    expect(await hasSettled(waiting)).toBe(false);
+
+    choreography.dispose();
+
+    expect(await hasSettled(waiting)).toBe(true);
+  });
+
+  it('isIdle is true after dispose, and whenAllIdle over a disposed choreography resolves', async () => {
+    const { choreography } = onScreen();
+    choreography.openVolume(ELSEWHERE);
+    expect(choreography.isIdle()).toBe(false);
+
+    choreography.dispose();
+
+    // Asked first, because `whenAllIdle` over a source that reports busy and
+    // whose `whenIdle` has resolved spins rather than fails.
+    expect(choreography.isIdle()).toBe(true);
+    expect(await hasSettled(whenAllIdle([choreography]))).toBe(true);
+  });
+
+  it('frame swaps nothing after dispose', () => {
+    const { choreography, swaps } = onScreen();
+    choreography.openVolume(ELSEWHERE);
+
+    choreography.dispose();
+    for (let frame = 0; frame < 20; frame += 1) {
+      tick(choreography);
+    }
+
+    expect(swaps).toEqual([]);
+  });
+});
+
+describe('reduced motion', () => {
+  it('prefersReducedMotion is read per flight', () => {
+    let isReduced = false;
+    const { choreography } = onScreen(() => isReduced);
+    choreography.openVolume(TARGET);
+    // Flown: the camera has not left the room yet.
+    expect(choreography.isIdle()).toBe(false);
+    flyOn(choreography);
+
+    isReduced = true;
+    choreography.back();
+
+    // Cut: at the shelf in the same call, with no frame run.
+    expect(choreography.isIdle()).toBe(true);
+    expectRigAt(choreography.rig(), shelfPose(TARGET.wall, TARGET.shelf));
   });
 });
 

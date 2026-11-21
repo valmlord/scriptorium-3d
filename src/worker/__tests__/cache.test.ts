@@ -1,11 +1,17 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import fc from 'fast-check';
 import {
+  BOOKS_PER_SHELF,
   PAGES_PER_BOOK,
   PAGES_PER_ROOM,
   PAGE_LENGTH,
   ROOM_COUNT,
+  SHELVES_PER_WALL,
   TITLE_LENGTH,
+  WALLS_PER_ROOM,
+  fromLinear,
+  roomFromName,
+  roomToName,
 } from '@core/index';
 import type { Address, BookAddress } from '@core/index';
 import {
@@ -35,6 +41,39 @@ import {
  * witness.
  */
 const BYTES_PER_CHARACTER = 2;
+
+/**
+ * The key format, written out for the same reason: a key is the room's
+ * canonical name (SPEC §3), this separator, and the page's index within the
+ * room in base 36.
+ */
+const KEY_SEPARATOR = ':';
+
+/** The index of a page within its room, by the SPEC §3 ordering. */
+function indexWithinRoom(address: Address): number {
+  const volumeInRoom =
+    (address.wall * SHELVES_PER_WALL + address.shelf) * BOOKS_PER_SHELF +
+    address.volume;
+  return volumeInRoom * PAGES_PER_BOOK + address.page;
+}
+
+/** How long the key of `address` must be, from the SPEC's constants alone. */
+function expectedKeyLength(address: Address): number {
+  return (
+    roomToName(address.room).length +
+    KEY_SEPARATOR.length +
+    indexWithinRoom(address).toString(36).length
+  );
+}
+
+/**
+ * The longest key: the last room's name, the separator, and the largest index
+ * a room has.
+ */
+const LONGEST_KEY_LENGTH =
+  roomToName(ROOM_COUNT - 1n).length +
+  KEY_SEPARATOR.length +
+  (PAGES_PER_ROOM - 1).toString(36).length;
 
 /** What the cache should charge for an entry, computed independently. */
 function expectedBytes(key: string, value: string): number {
@@ -391,11 +430,12 @@ describe('an entry larger than the whole budget', () => {
 
 describe('the two budgets', () => {
   /**
-   * A room deep enough that its linear index needs the full `PAGE_LENGTH`
+   * A room deep enough that its name is as long as the last room's, 3197
    * base-36 digits, which is what a key costs for any room not near the start
    * of the library — a deep link or "open a random book" lands here, not in
-   * room 0. Entries are then at their worst cost, so the budgets are filled by
-   * the number of entries their derivation claims rather than by many more.
+   * room 0. Entries are then near their worst cost, so the budgets are filled
+   * by about the number of entries their derivation claims rather than by many
+   * more.
    */
   const deepRoom = (offset: number): bigint => ROOM_COUNT / 2n + BigInt(offset);
 
@@ -424,16 +464,69 @@ describe('the two budgets', () => {
   const MORE_PAGES_THAN_FIT = PAGES_PER_BOOK * 2;
 
   it('holds one volume of pages at the worst cost a page entry can have', () => {
-    const worstCasePageEntry = (PAGE_LENGTH + PAGE_LENGTH) * BYTES_PER_CHARACTER;
+    const worstCasePageEntry = (LONGEST_KEY_LENGTH + PAGE_LENGTH) * BYTES_PER_CHARACTER;
 
     expect(Math.floor(PAGE_BUDGET_BYTES / worstCasePageEntry)).toBe(PAGES_PER_BOOK);
   });
 
   it('holds one room of titles at the worst cost a title entry can have', () => {
-    const worstCaseTitleEntry = (PAGE_LENGTH + TITLE_LENGTH) * BYTES_PER_CHARACTER;
+    const worstCaseTitleEntry =
+      (LONGEST_KEY_LENGTH + TITLE_LENGTH) * BYTES_PER_CHARACTER;
 
     expect(Math.floor(TITLE_BUDGET_BYTES / worstCaseTitleEntry)).toBe(
       PAGES_PER_ROOM / PAGES_PER_BOOK
+    );
+  });
+
+  it('the last volume of room ROOM_COUNT - 2 keeps all 410 of its pages', () => {
+    // The last volume of a room has the longest indices, and ROOM_COUNT - 2 is
+    // the deepest room that holds one whole: the last room stops short of it.
+    const pages: Address[] = Array.from({ length: PAGES_PER_BOOK }, (_, page) => ({
+      room: ROOM_COUNT - 2n,
+      wall: WALLS_PER_ROOM - 1,
+      shelf: SHELVES_PER_WALL - 1,
+      volume: BOOKS_PER_SHELF - 1,
+      page,
+    }));
+    const cache = new GenerationCache();
+
+    for (const page of pages) {
+      cache.setPage(page, PAGE_TEXT);
+    }
+
+    expect(cache.pageCount).toBe(PAGES_PER_BOOK);
+    expect(cache.pageBytes).toBe(
+      pages.reduce(
+        (total, page) =>
+          total + (expectedKeyLength(page) + PAGE_LENGTH) * BYTES_PER_CHARACTER,
+        0
+      )
+    );
+  });
+
+  it('a deep room keeps all 640 of its titles', () => {
+    const volumesPerRoom = WALLS_PER_ROOM * SHELVES_PER_WALL * BOOKS_PER_SHELF;
+    const books: BookAddress[] = Array.from({ length: volumesPerRoom }, (_, index) => ({
+      room: deepRoom(0),
+      wall: Math.floor(index / (SHELVES_PER_WALL * BOOKS_PER_SHELF)),
+      shelf: Math.floor(index / BOOKS_PER_SHELF) % SHELVES_PER_WALL,
+      volume: index % BOOKS_PER_SHELF,
+    }));
+    const cache = new GenerationCache();
+
+    for (const book of books) {
+      cache.setTitle(book, TITLE_TEXT);
+    }
+
+    expect(cache.titleCount).toBe(volumesPerRoom);
+    expect(cache.titleBytes).toBe(
+      books.reduce(
+        (total, book) =>
+          total +
+          (expectedKeyLength({ ...book, page: 0 }) + TITLE_LENGTH) *
+            BYTES_PER_CHARACTER,
+        0
+      )
     );
   });
 
@@ -515,6 +608,240 @@ describe('addressing', () => {
         cache.setPage(first, 'the first page');
 
         expect(cache.getPage(second)).toBeUndefined();
+      }),
+      { numRuns: 1000 }
+    );
+  });
+});
+
+describe('keys', () => {
+  /** Room 0, the last room and anything between: names of every length. */
+  const arbitraryRoom: fc.Arbitrary<bigint> = fc.oneof(
+    fc.constant(0n),
+    fc.constant(ROOM_COUNT - 1n),
+    fc.bigInt({ min: 0n, max: ROOM_COUNT - 1n })
+  );
+
+  /** Both ends of a room and anything between: indices of every length. */
+  const arbitraryIndex: fc.Arbitrary<number> = fc.oneof(
+    fc.constant(0),
+    fc.constant(PAGES_PER_ROOM - 1),
+    fc.integer({ min: 0, max: PAGES_PER_ROOM - 1 })
+  );
+
+  /** The address of page `index` within `room`, by the SPEC §3 ordering. */
+  function addressAt(room: bigint, index: number): Address {
+    return fromLinear(room * BigInt(PAGES_PER_ROOM) + BigInt(index));
+  }
+
+  it('property: a key decodes back to the room and the index within the room it was made from', () => {
+    // A decode rather than a comparison of two keys: a pair property stays
+    // green with the separator dropped, because colliding pairs are too rare
+    // for a generator to draw, while a key that cannot be split is red at once.
+    fc.assert(
+      fc.property(arbitraryRoom, arbitraryIndex, (room, index) => {
+        const key = new GenerationCache().keyOf(addressAt(room, index));
+
+        const parts = key.split(KEY_SEPARATOR);
+
+        expect(parts).toHaveLength(2);
+        const [roomPart = '', indexPart = ''] = parts;
+        expect(roomFromName(roomPart)).toBe(room);
+        expect(roomPart).toBe(roomToName(room));
+        expect(Number.parseInt(indexPart, 36)).toBe(index);
+        expect(indexPart).toBe(index.toString(36));
+      }),
+      { numRuns: 1000 }
+    );
+  });
+
+  it('property: a key decodes to its own room and index when earlier keys have warmed the memo', () => {
+    // One cache for every case, unlike the property above: there each key is
+    // the first its cache makes, so the room-name memo is always empty and a
+    // memo that answers with another room's name stays green. Here every key
+    // after the first is made with the memo holding other rooms. The second
+    // arm draws from four rooms so that consecutive keys revisit them and
+    // both memo entries are hit and displaced. Because the cache outlives each
+    // case, a reported counterexample reproduces only after the cases before
+    // it, which the pinned seed replays.
+    const cache = new GenerationCache();
+    const revisitedRoom = fc.oneof(arbitraryRoom, fc.bigInt({ min: 0n, max: 3n }));
+    const keysInOrder = fc.array(fc.tuple(revisitedRoom, arbitraryIndex), {
+      minLength: 1,
+      maxLength: 6,
+    });
+
+    fc.assert(
+      fc.property(keysInOrder, (keys) => {
+        for (const [room, index] of keys) {
+          const parts = cache.keyOf(addressAt(room, index)).split(KEY_SEPARATOR);
+
+          expect(parts).toEqual([roomToName(room), index.toString(36)]);
+        }
+      }),
+      { numRuns: 1000 }
+    );
+  });
+
+  it('room 1 index 71 and room 37 index 35 have different keys', () => {
+    // Both are `11z` with the separator dropped: `1` + `1z` and `11` + `z`.
+    const cache = new GenerationCache();
+
+    const first = cache.keyOf(addressAt(1n, 71));
+    const second = cache.keyOf(addressAt(37n, 35));
+
+    expect(first).not.toBe(second);
+  });
+
+  it('property: room.toString(36) equals roomToName(room) for every valid room', () => {
+    // The cache renders the room with `toString(36)` because `roomToName`
+    // throws on a negative room; this is what lets it do so on a valid one.
+    fc.assert(
+      fc.property(arbitraryRoom, (room) => {
+        expect(room.toString(36)).toBe(roomToName(room));
+      }),
+      { numRuns: 1000 }
+    );
+  });
+});
+
+describe('the room-name memo', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** A room whose name is 3197 digits, so converting it is the cost at stake. */
+  const DEEP_ROOM = ROOM_COUNT / 2n;
+  const OTHER_DEEP_ROOM = DEEP_ROOM + 1n;
+
+  /** Volume `volume` of shelf 0 on wall 0 of `room`. */
+  function bookAt(room: bigint, volume: number): BookAddress {
+    return { room, wall: 0, shelf: 0, volume };
+  }
+
+  /**
+   * How many times `room` itself was converted to a string. Filtered by the
+   * receiver because every key also converts its index within the room, which
+   * is a different `bigint`: unfiltered, a shelf of 32 keys counts 33 calls.
+   */
+  function conversionsOf(spy: { mock: { contexts: unknown[] } }, room: bigint): number {
+    return spy.mock.contexts.filter((context) => context === room).length;
+  }
+
+  it("a shelf's 32 keys convert the room once", () => {
+    const cache = new GenerationCache();
+    const toString = vi.spyOn(BigInt.prototype, 'toString');
+
+    for (let volume = 0; volume < BOOKS_PER_SHELF; volume += 1) {
+      cache.getTitle(bookAt(DEEP_ROOM, volume));
+    }
+
+    expect(conversionsOf(toString, DEEP_ROOM)).toBe(1);
+  });
+
+  it('keys from two interleaved rooms convert each room once', () => {
+    const cache = new GenerationCache();
+    const toString = vi.spyOn(BigInt.prototype, 'toString');
+
+    for (let volume = 0; volume < BOOKS_PER_SHELF; volume += 1) {
+      cache.getTitle(bookAt(DEEP_ROOM, volume));
+      cache.getTitle(bookAt(OTHER_DEEP_ROOM, volume));
+    }
+
+    expect(conversionsOf(toString, DEEP_ROOM)).toBe(1);
+    expect(conversionsOf(toString, OTHER_DEEP_ROOM)).toBe(1);
+  });
+
+  it("a third room's shelf converts that room once with two other rooms remembered", () => {
+    // The tests above start from an empty memo, where a memo that never
+    // admits a room past its second passes them all.
+    const cache = new GenerationCache();
+    cache.getTitle(bookAt(5n, 0));
+    cache.getTitle(bookAt(7n, 0));
+    const toString = vi.spyOn(BigInt.prototype, 'toString');
+
+    for (let volume = 0; volume < BOOKS_PER_SHELF; volume += 1) {
+      cache.getTitle(bookAt(DEEP_ROOM, volume));
+    }
+
+    expect(conversionsOf(toString, DEEP_ROOM)).toBe(1);
+  });
+
+  it('remembers the two most recently used rooms and converts the third again', () => {
+    // Room 5 is used again after room 7, so room 9 displaces room 7.
+    const cache = new GenerationCache();
+    for (const room of [5n, 7n, 5n, 9n]) {
+      cache.getTitle(bookAt(room, 0));
+    }
+    const toString = vi.spyOn(BigInt.prototype, 'toString');
+
+    cache.getTitle(bookAt(5n, 1));
+    cache.getTitle(bookAt(9n, 1));
+    cache.getTitle(bookAt(7n, 1));
+
+    expect(conversionsOf(toString, 5n)).toBe(0);
+    expect(conversionsOf(toString, 9n)).toBe(0);
+    expect(conversionsOf(toString, 7n)).toBe(1);
+  });
+
+  /** Page 0 of volume 0 of shelf 0 on wall 0 of `room`: index 0 within it. */
+  function firstPageOf(room: bigint): Address {
+    return { room, wall: 0, shelf: 0, volume: 0, page: 0 };
+  }
+
+  it('a page of room 9 read after pages of rooms 5 and 7 is a miss, not either of theirs', () => {
+    // Regression: a memo that returned its second entry without checking the
+    // room gave room 9 the key of room 5, and this read returned room 5's text.
+    const cache = new GenerationCache();
+    cache.setPage(firstPageOf(5n), 'TEXT OF ROOM 5');
+    cache.setPage(firstPageOf(7n), 'TEXT OF ROOM 7');
+
+    const ninth = cache.getPage(firstPageOf(9n));
+
+    expect(ninth).toBeUndefined();
+    expect(cache.getPage(firstPageOf(5n))).toBe('TEXT OF ROOM 5');
+    expect(cache.getPage(firstPageOf(7n))).toBe('TEXT OF ROOM 7');
+  });
+
+  it('property: with the memo warm across rooms, a page set is read back as its own text', () => {
+    // One cache for every case, so the memo is never cold after the first
+    // read. Six rooms and a dozen pages in each, so reads revisit pages set
+    // earlier, in this case or a previous one, with other rooms in between.
+    // Nothing is evicted: the 72 reachable pages hold under 0.5 MB against
+    // PAGE_BUDGET_BYTES, so a page that has been set must read back exactly,
+    // and a miss is only a page no step has set yet. That is what catches a
+    // memo that gives a page's set and its get different keys.
+    const cache = new GenerationCache();
+    const setPages = new Set<string>();
+    const revisitedRoom = fc.constantFrom(0n, 5n, 7n, 9n, DEEP_ROOM, OTHER_DEEP_ROOM);
+    const revisitedPage: fc.Arbitrary<Address> = fc.record({
+      room: revisitedRoom,
+      wall: fc.integer({ min: 0, max: 1 }),
+      shelf: fc.constant(0),
+      volume: fc.integer({ min: 0, max: 1 }),
+      page: fc.integer({ min: 0, max: 2 }),
+    });
+    const operation = fc.record({
+      kind: fc.constantFrom<'set' | 'get'>('set', 'get'),
+      address: revisitedPage,
+    });
+    /** Unique per address, so a text names the page it was stored for. */
+    const textOf = (address: Address): string => JSON.stringify(address, replaceBigInt);
+
+    fc.assert(
+      fc.property(fc.array(operation, { minLength: 1, maxLength: 8 }), (operations) => {
+        for (const { kind, address } of operations) {
+          if (kind === 'set') {
+            cache.setPage(address, textOf(address));
+            setPages.add(textOf(address));
+          }
+
+          const read = cache.getPage(address);
+
+          expect(read).toBe(
+            setPages.has(textOf(address)) ? textOf(address) : undefined
+          );
+        }
       }),
       { numRuns: 1000 }
     );

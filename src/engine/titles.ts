@@ -87,6 +87,13 @@ export interface SpineTitleAtlas {
   setShelfTitles(firstSlot: number, titles: readonly string[]): void;
   /** The shelves whose titles the atlas currently holds. */
   readonly shelvesHeld: readonly number[];
+  /**
+   * Whether the spines' material has been patched to the titled variant, so
+   * that the room's next render draws with the titled program. It reads one
+   * field and allocates nothing, because the viewer asks after every render
+   * (`./retirement.ts`).
+   */
+  readonly isTitled: boolean;
 }
 
 /** What the atlas writes into. */
@@ -129,6 +136,12 @@ export function createSpineTitleAtlas(
   return {
     get shelvesHeld(): readonly number[] {
       return allocator.held;
+    },
+
+    // The device is set in the call that patches the material, and never set
+    // back, so this is the titled variant's state without a second record.
+    get isTitled(): boolean {
+      return device !== null;
     },
 
     setShelfTitles(firstSlot: number, titles: readonly string[]): void {

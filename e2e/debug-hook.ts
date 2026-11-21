@@ -45,6 +45,12 @@ declare global {
       state(): { level: string };
       address(): (HookAddress & { room: bigint }) | null;
       rig(): HookRig;
+      memory(): {
+        geometries: number;
+        textures: number;
+        programs: number | null;
+        isRetiring: boolean;
+      };
       frames(): never;
       waitForIdle(): Promise<void>;
     };

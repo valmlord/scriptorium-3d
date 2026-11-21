@@ -39,8 +39,12 @@ const { createProtocolHandlerState, handleProtocolMessage } =
 const SOME_ADDRESS = { room: 0n, wall: 0, shelf: 0, volume: 0, page: 0 };
 const SOME_BOOK = { room: 0n, wall: 0, shelf: 0, volume: 0 };
 
+/** Only a `search` reads the source, and no case here sends one. */
+const neverRead = (byteLength: number): Uint8Array => new Uint8Array(byteLength);
+
 function answer(payload: unknown) {
-  return handleProtocolMessage(payload, createProtocolHandlerState()).response;
+  return handleProtocolMessage(payload, createProtocolHandlerState(), neverRead)
+    .response;
 }
 
 describe('a core call that throws something other than an Error', () => {
