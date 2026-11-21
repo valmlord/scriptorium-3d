@@ -250,45 +250,61 @@ a debug hook that lies is worse than one that is absent.
 
 **`memory()` is for leaks across room changes.** It reads `renderer.info` when it is called:
 `geometries` and `textures` from `renderer.info.memory`, `programs` as the length of
-`renderer.info.programs`, and `isRetiring`, whether the viewer is keeping a replaced room for its
-shader programs (`src/engine/retirement.ts`). The counts include that room while it is kept, so a
-leak test compares them once `isRetiring` is `false`, and waits for that with `page.waitForFunction`
-rather than for a duration. Draw calls are not in it: `e2e/webgl-probe.ts` records them per frame,
+`renderer.info.programs` (`null` while the renderer has no program cache), and `isRetiring`, whether
+the viewer is keeping a replaced room for its shader programs (`src/engine/retirement.ts`). The
+counts include that room while it is kept, so a leak test compares them once `isRetiring` is `false`,
+and waits for that with `page.waitForFunction` rather than for a duration. Draw calls are not in it: `e2e/webgl-probe.ts` records them per frame,
 below three.js.
 
 **`waitForIdle()` is composed, not owned.** It resolves when every source of pending work the
 composition knows about is idle. In M5 that is the camera flight: the playhead has arrived at the
 label for the level the FSM is at, and no playhead tween is running (ADR-0030 explains why the label
-alone is not enough). From M6 there are four, joined by `src/app/idle.ts` and listed in
-`src/main.ts` rather than by a second opinion held inside the hook:
+alone is not enough). From M6 there are four, and from M7 five, joined by `src/app/idle.ts` and
+listed in `src/main.ts` rather than by a second opinion held inside the hook:
 
-1. the camera flight, as above;
+1. the camera flight, as above, in the room the machine names: while the machine and the screen name
+   different rooms the choreography is busy, even with the camera at rest (ADR-0034);
 2. the worker client's request table, which reports an empty table as an event rather than leaving
    a test to poll `pendingCount`;
 3. the reader, which is idle when the page in the DOM is the page the FSM says is open and nothing
    is in flight for it — the client going quiet is not the same statement, because a page arriving
    leaves the client with nothing to do and the reader with 80 lines to write;
 4. the title resolver, because a shelf of 32 titles is generated work a test has every reason to
-   wait for, and the flight arriving at a shelf is what starts it.
+   wait for, and the flight arriving at a shelf is what starts it;
+5. the search session, because the client is quiet the moment a hit arrives and the session acts on
+   it a microtask later, so a test waiting on the client alone would read the machine before the hit
+   had moved it.
 
-**One pass over those four is not an answer**, which is the one property of the composition worth a
+**One pass over those five is not an answer**, which is the one property of the composition worth a
 test: settling one source can make another busy, so `whenAllIdle` re-reads the list after every
 settlement (`src/app/__tests__/idle.test.ts`).
 
 ## 8. Coverage thresholds
 
-| Path                            | Lines / branches                          |
-| ------------------------------- | ----------------------------------------- |
-| `src/core/**`                   | 100% — it is pure, small and load-bearing |
-| `src/worker/**`, `src/state/**` | 90%                                       |
-| `src/motion/**`                 | 80%                                       |
-| `src/engine/**`, `src/ui/**`    | no threshold; covered by e2e              |
-| `src/app/**`                    | no threshold; see below                   |
+Each floor holds for lines, branches, functions and statements alike. `vite.config.ts` sets them per
+glob, and there is no global threshold behind them.
 
-`src/app/**` carries no threshold for the same reason `engine` does not: `url.ts` and
-`choreography.ts` are unit-tested directly and `controls.ts` is a DOM event handler that only an
-end-to-end test can exercise, so one number over the three would be a number about the mixture
-rather than about any of them.
+| Path                                                                                                                                | Floor                                     |
+| ----------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| `src/core/**`                                                                                                                       | 100% — it is pure, small and load-bearing |
+| `src/worker/**`, `src/state/**`                                                                                                     | 90%                                       |
+| `src/app/**`, `src/motion/**`                                                                                                       | 80%                                       |
+| `src/engine/retirement.ts`                                                                                                          | 100%                                      |
+| `src/ui/query.ts`, `src/ui/search-session.ts`, `src/ui/highlight.ts`, `src/ui/page-grid.ts`, `src/ui/room-name.ts`, each on its own | 90%                                       |
+| the rest of `src/engine/**` and `src/ui/**`                                                                                         | no threshold; covered by e2e              |
+
+`src/app/**` is at 80 rather than 90 because `controls.ts` installs DOM pointer handlers that only
+Playwright reaches. Its one DOM-free predicate, `isEditableTarget`, is unit-tested, and the rest of the
+file stays below the line. The floor is pooled over the layer's files, so the rest of the layer, the
+title resolver and the composition of `waitForIdle()` among it, carries `controls.ts`.
+
+`engine` and `ui` carry no floor as layers, because most of each needs WebGL or a DOM. The modules of
+each that need neither have floors of their own: `retirement.ts` decides when a replaced room is
+disposed, holds no three.js and is unit-tested whole, so it is held at 100; the four pure `ui` modules
+and the DOM-free search session are held at 90. `reader.ts` and `search.ts` build the DOM and are
+Playwright's alone. **One glob per module, never one brace glob over several:** Vitest pools the files a
+glob matches, so a fully tested `query.ts` beside a `search-session.ts` at 0% branches passed a pooled
+floor.
 
 Thresholds only ratchet upward. Lowering one requires a line in the PR description explaining what was
 given up.

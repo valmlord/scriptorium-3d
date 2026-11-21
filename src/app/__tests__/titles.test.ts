@@ -258,9 +258,9 @@ describe('which shelf is asked for', () => {
   it('does not ask again for a shelf the atlas is still holding', async () => {
     // The atlas is the authority on what is drawn, so it is asked rather than
     // remembered. Each ask is 32 calls through the client's cache and each one
-    // renders a key from the room's linear index, which is milliseconds of
-    // `bigint` work per navigation event at the depth a deep link reaches.
-    // ADR-0032 holds the measurement; this file does not restate it.
+    // renders a key. ADR-0034 holds what the 32 keys cost at the depth a search
+    // hit or a deep link reaches, and ADR-0032 what asking the atlas costs;
+    // this file restates neither.
     const { navigation, source } = harness();
     goTo(navigation, SHELF, 3);
     source.forShelf(SHELF).resolve(titlesOf(SHELF));

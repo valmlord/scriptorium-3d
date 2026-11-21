@@ -184,11 +184,12 @@ export function createTitleResolver(options: TitleResolverOptions): TitleResolve
     if (isAlreadyDrawn(wanted)) {
       // Nothing to generate and nothing to draw. Asked here rather than left
       // to the atlas because the fan-out happens first: a shelf is 32 calls
-      // through the client's cache, and each one renders a cache key from the
-      // room's linear index, which at the depth a deep link reaches (M8) is
-      // milliseconds of `bigint` work against nanoseconds for this check.
-      // ADR-0032 holds both figures. The atlas refusing to redraw saves the
-      // upload; this saves the asking.
+      // through the client's cache, and each one renders a cache key. At the
+      // depth a search hit or a deep link reaches, the 32 keys cost 0.04 to
+      // 0.05 ms with the room's name remembered and up to 1.10 ms without it
+      // (ADR-0034), against 1.4 to 1.9 microseconds for this check
+      // (ADR-0032). The atlas refusing to redraw saves the upload; this saves
+      // the asking.
       //
       // Nothing is released here, and that is deliberate: this path is only
       // reached with a shelf in flight or with nothing in flight at all. With

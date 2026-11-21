@@ -24,7 +24,7 @@ import type { Page } from '@playwright/test';
  * application's callback, in every frame that drew, it is the state that
  * frame's draw calls were issued under. Polling it from Playwright misses it:
  * a `waitForFunction` every 50 ms, the interval `readWebGLProbe` uses, missed
- * it in 10 of 10 WebKit loads on correct code when M7 measured it.
+ * it in 10 of 10 WebKit loads on correct code (ADR-0034).
  *
  * This is not a pixel-diff screenshot, which `docs/testing.md` §6 rules out:
  * nothing here is compared against a stored image. It asks one question a

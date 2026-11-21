@@ -925,8 +925,8 @@ nothing here, and a single round figure in megabytes would have to mean one of t
 
 |        | worst-case entry               | multiplier             | ceiling                      |
 | ------ | ------------------------------ | ---------------------- | ---------------------------- |
-| pages  | `(3200 + 3200) * 2` = 12 800 B | `PAGES_PER_BOOK` = 410 | **5 248 000 B** (≈ 5.00 MiB) |
-| titles | `(3200 + 25) * 2` = 6 450 B    | volumes per room = 640 | **4 128 000 B** (≈ 3.94 MiB) |
+| pages  | `(3202 + 3200) * 2` = 12 804 B | `PAGES_PER_BOOK` = 410 | **5 249 640 B** (≈ 5.01 MiB) |
+| titles | `(3202 + 25) * 2` = 6 454 B    | volumes per room = 640 | **4 130 560 B** (≈ 3.94 MiB) |
 
 **Pages are bounded by one volume**, because that is the bound of the only access pattern that
 revisits a page: reading is page-at-a-time inside a book — flip forward, flip back, follow a search
@@ -947,7 +947,7 @@ room reached by a deep link or by "open a random book" has a 3197-digit name. An
 one home (ADR-0013): the ceilings are derived from `core`'s own `PAGES_PER_BOOK`, `PAGES_PER_ROOM`,
 `PAGE_LENGTH` and `TITLE_LENGTH`, and the tests assert the _derivation_ — "this budget holds one
 volume of worst-case page entries" — rather than restating the figure. Total resident cost is
-9 376 000 B, about 8.94 MiB: small beside a room's instanced geometry, and **bounded**, which is the
+9 380 200 B, about 8.95 MiB: small beside a room's instanced geometry, and **bounded**, which is the
 property that matters. It does not grow with how long the camera has been moving.
 
 **Why the key is charged, and why it is a rendered string.** A key is `toLinear(address).toString(RADIX)`
@@ -1000,12 +1000,12 @@ be a property test rather than a sleep.
   for information the next `get` already gives.
 
 **Open: does the long key have to repeat?** The title store pays its budget almost entirely in keys.
-Of its 4 128 000 bytes, the titles themselves are 32 000:
+Of its 4 130 560 bytes, the titles themselves are 32 000:
 
 |                                  | bytes     | share of the ceiling |
 | -------------------------------- | --------- | -------------------- |
 | title text — 640 × 25 characters | 32 000    | 0.8%                 |
-| keys — 640 × 3200 characters     | 4 096 000 | 99.2%                |
+| keys — 640 × 3202 characters     | 4 098 560 | 99.2%                |
 
 Charging those keys is still right, for the reason above. But _charging_ a key and _repeating_ it are
 different questions, and only the first is decided here. **All 640 volumes of a room share one room
@@ -1032,6 +1032,26 @@ to base 36 natively in about 0.1 ms — against the 1.0 to 1.35 ms `getPage` and
 result never reaches the cache is the **client's** to enforce, by not calling `setPage` or `setTitle`
 for a cancelled request id: this module holds no opinion about request ids, which is why the rule
 cannot live here.
+
+**Note, 2026-11-21: a key renders its room once, and the figures above were recomputed in place
+(ADR-0034).** A key is no longer `toLinear(address).toString(RADIX)`, as the paragraph on keys above
+says. It is `<room>:<index within the room>`: the room as `room.toString(36)`, then the index within the
+room, `toLinear(address) - room * PAGES_PER_ROOM`, in base 36. All 32 keys of a shelf share one room, and
+at the depth a search hit lands, rendering the whole index 32 times cost 26.3 to 32.3 ms in Chromium,
+where the split key costs 0.04 ms once the room's name is remembered. The pair is the linear index split
+at the room boundary and `:` is in neither part, so the key is still total and injective.
+
+- `MAX_KEY_LENGTH` is the longest room name, the separator and the longest index within a room,
+  3197 + 1 + 4 = 3202, derived from the constants in `cache.ts`. A page's key is now two characters
+  longer than the page it names, and a title's key is still 128 times the title.
+- The two ceilings are recomputed from it: 410 × 12 804 = 5 249 640 B for pages and 640 × 6 454 =
+  4 130 560 B for titles, 9 380 200 B together. The table, the total and the open question's table
+  above carry the new figures, and the reasoning behind them is unchanged.
+- "The only state is the map and a running byte total" is no longer the whole of it. `GenerationCache`
+  also keeps a two-entry memo of room names. It memoises a pure function, so it changes no answer and no
+  byte counted, it is charged against neither budget, and the same operations still produce the same
+  contents and the same recency order.
+- The open question stands as it was: the room is now rendered once, but every key still stores it.
 
 ---
 
@@ -2438,6 +2458,15 @@ the worker is still generating, and a turn superseded by a cache hit in its own 
   `DOMAIN_TAG` and the worker's must. ADR-0029's open paragraph is closed by that test rather than
   by this sentence.
 
+**Note, 2026-11-21: the fan-out this record left alone is fixed by ADR-0034's cache keys.** It was left
+because it was paid once per shelf while the camera was flying. M7 changed both halves of that: a search
+hit lands at a deep room almost every time, and the room swap's `titles.refresh()` and the shelf request
+made on the hit's event each pay the fan-out on every search. In a browser it was also larger than the
+2.3 ms measured here under `vite-node`: 26.3 to 32.3 ms for the 32 keys of one shelf in Chromium and
+12 ms in WebKit. A key now renders the room once, through a two-entry memo of room names, and appends the
+index within the room. `MAX_KEY_LENGTH` grew by the separator, as this record expected, to 3202. The
+check `app/titles.ts` makes before fanning a shelf out is unchanged and still saves the asking.
+
 ---
 
 ## ADR-0033 — Search crosses the thread boundary as a message, and its random bytes belong to the worker's loop
@@ -2538,6 +2567,376 @@ answer would be a wrong one.
   a shelf the camera has left are cancelled.
 - The handler's header and ADR-0026's two sentences are the places this record changes; the second is
   amended here rather than edited in place, so ADR-0026 still reads as it was decided.
+
+---
+
+## ADR-0034 — Changing rooms is `enter-room` at the room level, and the room is swapped at the room stop
+
+**Decision.** A change of room is the navigation event `enter-room { room }`, legal at the room level
+only, so the transition table has 4 x 6 = 24 pairs. `eventsTo` routes between two rooms on a branch of
+its own: `back` up to the room level, `enter-room`, then the full descent of the target in its own room,
+with a page turn appended when the target page is not the entry page. The choreography flies the camera
+up to the room stop of the room on screen, swaps the room there inside `frame()`, and flies down in the
+new room from the same frame. After startup, `viewer.loadRoom` is called by that swap and by nothing
+else. A replaced room leaves the scene at once and is disposed by a one-slot retirement policy, which
+keeps a room that has rendered with titles until the loaded room has too. The worker cache renders a
+room's part of a key once per room rather than once per key.
+
+Figures marked "design review" were taken by the performance review of this milestone's design, on an
+Apple M4, in Chromium 151 on ANGLE Metal and WebKit 26.5. The measurements taken on the code itself
+are under _What was measured_ below, and those of the cache keys under _The cache keys_.
+
+**Why `enter-room`, and only at the room level.** A room is the top of the ladder, so moving to another
+room is a sideways move between two tops. Legal at every level, it would be a sideways move at every
+level, which is the growth the ladder exists to avoid. At the room level the move costs the camera
+nothing: every room's room stop is the same pose. `isAncestorOf` compares only the components below the
+room, which makes the room level an ancestor of everything, so without a branch of its own `eventsTo`
+would route between two books with the same wall, shelf and volume in different rooms as a page turn in
+the wrong room. The fold property in `src/state/__tests__/navigation.test.ts` draws such pairs often and
+covers the branch. `enter-room` validates the room through `core` before the machine moves, so a room
+past the end of the library is an `InvalidAddressError`.
+
+**Why the swap is in `frame()`, at the room stop.** `frame()` is the one place time enters the
+application, and a test can drive it without WebGL. While the machine names a room the screen does not
+show, the choreography flies to the room stop of the room on screen; that is the retreat. In the frame
+in which the flight has settled there, it calls `showRoom(state.room)` and flies the machine's route in
+the new room, so the swap is never seen mid-flight and the descent starts in the frame the retreat ended
+in. The built legs are geometric and carry no room, so a route to the same wall, shelf and volume in the
+new room keeps them. The frame's check is written rooms first,
+`navigation.state.room !== shownRoom() && flight.isSettled`, because `isSettled` allocates on its way to
+an answer: at rest the check is one `bigint` comparison that is false. A search back to the room on
+screen before the swap retargets the flight and swaps nothing.
+
+The choreography keeps no copy of the room on screen. It reads it through `shownRoomOf(viewer)`
+(`src/app/shown-room.ts`), and the viewer is the single holder. The getter throws `NoRoomLoadedError`
+while no room is loaded rather than answering with the first room, which would be a second opinion that
+turns wrong the day the library opens at a URL's room. This is also why `src/main.ts` now builds the
+viewer and loads the first room before it builds the choreography.
+
+`isIdle()` is `disposed || (rooms agree && flight settled)`. While the rooms disagree, `whenIdle()`
+waits on change waiters, released by a swap, by every machine notification and by `dispose()`. It
+cannot wait on the flight then: a retreat can settle outside any frame (a search from the room level
+settles inside `dispatchAll`, and a cut settles on the spot), so `flight.whenSettled()` is already
+resolved and a loop over it would spin in microtasks with no frame ever running the swap. Waiting for a
+swap alone would hang instead when the rooms agree again without one. A released waiter is never reused,
+and a disposed choreography is idle, because `whenAllIdle` loops while any source reports busy.
+
+**Only the swap loads a room after startup.** `src/main.ts` calls `viewer.loadRoom` twice: once at
+startup, and once in the `showRoom` callback it gives the choreography, followed by `titles.refresh()`.
+A third caller would skip the refresh, leaving the shelf being read blank, and would put a room on screen
+that the machine does not name. `src/app/__tests__/room-loading.test.ts` parses every source file under
+`src/` outside `__tests__` with the TypeScript compiler API and asserts exactly two call expressions on a
+property named `loadRoom`, both in `src/main.ts`. A comment or a string quoting the call is not a call
+expression and does not count. A walk into a neighbouring room dispatches `enter-room` too; a corridor
+that wants a different camera move puts it in the choreography's swap, not in a second caller of
+`loadRoom`.
+
+**A throw from `showRoom` is unreachable, and carries no code.** `enter-room` validates the room before
+the machine moves, and `createRoom` is only ever given a validated room. If a build did throw inside
+`frame()`, three.js would already have asked for the next frame, so the throw would recur on every
+frame. Nothing reaches that path today; a change that adds a way for building a room to fail owns its
+handling.
+
+**The cache keys.** A key was `toLinear(address).toString(36)`: at the depth a search hit almost always
+lands, a conversion of up to 16 544 bits for every key. The swap's `refresh()` and the shelf request
+made on the hit's event each pay 32 of them. In the design review the 32 keys of one shelf took 26.3 to
+32.3 ms in Chromium (25.3 ms in a second harness) and 12 ms in WebKit.
+
+- A key is now `<room>:<index within the room>`, both parts in base 36. The room part is
+  `room.toString(36)` rather than `roomToName`. The digits are the same for every valid room, but
+  `roomToName` throws for a negative room, which would turn `client.page` for such an address from a
+  request that rejects with `GenerationFailedError` into a synchronous throw on the main thread. It also
+  converts twice where `toString` converts once: 1.64 against 0.78 ms cold in Chromium.
+- `:` is in neither alphabet and both parts are canonical, so the key is injective.
+  `src/worker/__tests__/cache.test.ts` proves it with a decode round trip, because a property that only
+  compared pairs of keys stayed green with the separator dropped, and it names the collision that the
+  separator prevents: room 1 at index 71 and room 37 at index 35 would both be `11z`.
+- `GenerationCache` keeps a two-entry memo of room names, most recent first. One entry thrashes as soon
+  as keys from two rooms interleave, about 50 ms per 64 keys in Chromium and 20 ms in WebKit. This
+  milestone cannot interleave them, because a late reply to a cancelled request is never cached and
+  one shelf is in flight at a time; neighbouring rooms might, and the second entry costs nothing.
+- `MAX_KEY_LENGTH` is derived from the constants: the longest room name, the separator and the longest
+  index within a room, 3197 + 1 + 4 = 3202. ADR-0019's two budgets are recomputed from it, under a dated
+  note there.
+- With the memo warm, a shelf's 32 keys at a deep room cost 0.04 ms in Chromium and 0.05 ms in WebKit,
+  and 1.10 and 0.35 ms with it cold, against 25.3 and 9 ms for the old keys in the same harness (design
+  review). In the swap the memo is warm, because the reader's page and the shelf request key the new
+  room when the machine's event fires.
+- Measured on the code itself on 2026-11-21, through the real `GenerationCache.getTitle` in a
+  production Vite build, on the Apple M4 in Chromium 151.0.7922.34 and WebKit 26.5, at a room whose
+  name has 3197 digits, 25 runs each: with the memo cold, one shelf's 32 keys took a median of 0.84 ms
+  in Chromium (0.80 to 0.90) and 0.36 ms in WebKit (0.34 to 0.38); with it warm, 0.037 ms (0.036 to
+  0.038) and 0.047 ms (0.046 to 0.068), each warm run the mean of 200 shelves. The old keys took
+  25.4 ms (25.0 to 25.6) and 9.7 ms (9.5 to 10.0) in the same page.
+
+**The retirement policy.** three.js 0.187 frees a shader program as soon as nothing uses it, so
+disposing the old room before the new one was drawn made the swap frame link its five programs again:
+17.6 to 32.5 ms in Chromium on Metal and 17 to 33 ms in WebKit (design review). Deferring the disposal by
+exactly one render keeps those five but not the sixth, the titled spine variant (`src/engine/titles.ts`),
+which only the old room holds. It was released with the old room and linked again a frame later, 4.2 to
+10 ms, in 10 of 10 swaps.
+
+So `loadRoom(room)` does four things, in this order:
+
+1. It builds the new room, so a room that cannot be built leaves the old one loaded.
+2. It takes the loaded room's group out of the scene at once, so no frame draws two rooms or picks from
+   the wrong one. Handing the policy a room still in the scene draws both at the same origin until the
+   release: 12 draw calls a frame in the design review's control, where `MAX_DRAW_CALLS` is 6.
+3. It hands the room it took out to `retirement.replace(outgoing)`, or calls `replace(null)` on the
+   first load.
+4. It makes the new room the loaded one and adds it to the scene. `viewer.room` is the new room from the
+   moment `loadRoom` returns.
+
+`viewer.dispose()` disposes the retiring room, then the loaded one.
+
+`src/engine/retirement.ts` has no three.js in it. It is the single holder of one slot,
+`{ room, titled } | null`, and it keeps one more fact, whether the loaded room has rendered with titles;
+it never holds the loaded room. Its interface is `replace(outgoing)`, `noteRender(isTitled)`,
+`isOccupied`, which the viewer's `isRetiring` reads for the debug hook, and `dispose()`. "Titled" means
+"has rendered with titles", the fact the programs depend on, not "has a shelf in its atlas": under
+reduced motion a room's titles and the next hit can land in one frame interval, so a room can hold
+shelves and never have linked the titled program.
+
+- **On a replace**, if the slot is empty or its room is not titled, the retiring room, if any, is
+  disposed and the outgoing room, if any, retires. Otherwise the outgoing room is disposed at once and
+  the titled room stays, which is safe because it holds the same five base programs. Whether the
+  outgoing room is titled is deliberately not a term: with a titled room retiring it cannot be, because
+  its first titled render released that room. The titled flag is then reset for the room being loaded.
+  Holding the room and its flag in one value makes "the slot is empty or its room is untitled" one test,
+  and a condition that forgets the empty slot does not compile under strict TypeScript.
+- **After each render**, if the slot is occupied, the retiring room is released when the loaded room is
+  titled, because that render has just linked the titled program while the retiring room still held it,
+  or when the retiring room is not titled.
+- **How long a room can be kept.** A titled room is kept until the loaded room's first titled render,
+  through any number of swaps in between, and a swap never releases it. An untitled replaced room is
+  released at the latest after the first render that follows its replacement. That is one room at most:
+  5 geometries and 2 textures, mostly the 1024 x 2048 atlas, about 8 MiB on the GPU and an 8 MiB canvas
+  beside it.
+
+The rules are unit-tested in `src/engine/__tests__/retirement.test.ts`, with a coverage floor of 100 on
+all four measures. Two loads before a render cannot be produced through the interface, because a submit
+cancels the search before it and `frame()` swaps at most once a frame, so that case is covered there and
+nowhere else.
+
+What the deferred disposal costs, measured by the design review over five of its rounds: medians of 0.0
+to 0.3 ms on Chromium Metal, 0.1 to 0.9 ms under a 4x CPU throttle, and 0 to 1 ms in WebKit at its 1 ms
+timer resolution; at most 2.2 ms on Chromium Metal (at a swap), up to 3.5 ms under the throttle, once
+5.2 ms (a release in the first swap of a page, the frame of a 34.2 ms interval), and in WebKit up to 2
+ms, once 6 ms at a release after a long hold.
+
+**Where the viewer reports a render is held by a scan.** The policy's own tests cannot see where
+`noteRender` is called, and a report moved to the wrong place releases the titled program a frame early.
+So the call has one home: `src/engine/viewer.ts` has one private `renderFrame()` whose body is exactly
+
+```ts
+renderer.render(scene, camera);
+if (loaded !== null) retirement.noteRender(loaded.titles.isTitled);
+```
+
+The `if` is forced by the type, since `loaded` is `RoomHandle | null`, and it skips the report only
+before the first `loadRoom`. The animation loop runs the frame source, `applyRig` and then
+`renderFrame()`, and nothing else renders. `isTitled` is a getter on `SpineTitleAtlas` that returns
+`device !== null`, which is set in the same call that patches the material to the titled variant. It
+reads one field and allocates nothing: 0 minor GCs over 10 000 000 checks, 12.5 to 22.7 ns each (design
+review).
+
+`src/engine/__tests__/render-frame.test.ts` parses `src/` outside `__tests__` with the compiler API,
+through the same listing as the `loadRoom` guard (`src/__tests__/source-files.ts`), and asserts twelve
+things. Each is written so that it does not depend on any other:
+
+- **R1.** `src/` holds exactly one call of a property named `render`.
+- **R2.** `src/` holds exactly one call of a property named `noteRender`.
+- **R3.** `renderFrame` in `viewer.ts` has exactly two statements.
+- **R4a.** The first statement is an expression statement whose expression is a call.
+- **R4b.** The first call statement of the body, found by kind, calls a property named `render`.
+- **R5.** The body's `if`, found by kind and not by position, has the condition text `loaded !== null`.
+- **R6a.** That `if`'s consequent is a single statement, bare or the only one in a block.
+- **R6b.** The consequent's first statement calls a property named `noteRender`.
+- **R7.** The consequent's first call, found by kind whatever it is named, has the single argument
+  `loaded.titles.isTitled`.
+- **R8.** `src/` holds exactly one call of the identifier `renderFrame`.
+- **R9.** The function passed to `setAnimationLoop` contains a call of `renderFrame`.
+- **R10.** The `if` has no `else`.
+
+R4a fixes the kind of the first statement; R4b says which call it is. R6a fixes how many statements the
+consequent has; R6b says what the first one calls. None of R1, R2 or R8 says where its one call is: R4b,
+R6b and R9 say that, so a second call planted elsewhere breaks only a count.
+
+Each assertion has a planted case that breaks it and no other. A second render through an alias of the
+renderer breaks only R1, and a second `noteRender` in `loadRoom` only R2. A third statement in
+`renderFrame`, after the `if` or between the two statements, breaks only R3: the first statement is
+still the render, and R5 finds the `if` by kind. Swapping the two statements breaks only R4a; a `draw()`
+wrapper around the render, called first, breaks only R4b; a `report()` wrapper around `noteRender` only
+R6b, and a second statement in the consequent only R6a. A loosened condition such as
+`loaded?.titles.isTitled === true`, which passes strict `tsc` and drops every untitled render, breaks
+only R5. `noteRender(true)`, which would release a titled retiring room at the swap frame's render,
+breaks only R7. A `renderFrame()` call in `loadRoom`, which would release the titled room inside the
+swap callback, breaks R8 if the loop's call is kept and R9 if it is moved. An `else` breaks only R10. Run
+with each assertion deleted in turn against all twelve cases and the correct shape, bare and braced, the
+scan turned exactly one case green per deletion, its own, and every planted file passed strict `tsc`.
+The scan runs in `npm run verify` and fails in CI.
+
+**Left to review, by design.** R1 and R2 match a call by its callee's property name and R8 by the
+identifier, so a call that reaches its function some other way passes all three: an element access
+(`renderer['render'](...)`), `.call` and `.bind`, a parenthesized callee (`(renderer.render)(...)`), and
+a local binding (`const { render } = renderer`, `const rf = renderFrame`). The local binding is the
+likeliest in this codebase, since `viewer.ts` already destructures `frame` that way. None of these
+reaches `render`, `noteRender` or `renderFrame` in `src/` outside tests today. The scan does not chase
+them, and review does.
+
+The misplacements differ in what they cost, which is why the scan is needed and a measurement alone is
+not: in the design review (Chromium on Metal, 10 cycles each), a report moved before the render linked
+the titled program again once per cycle in scenarios 1, 2 and 5 below, and a second report planted in
+`loadRoom` did so only in scenario 5.
+
+**The recorded exceptions to `docs/architecture.md`.** Section 2 says there is no allocation in the
+render loop and that work above about 1 ms belongs in the worker. The swap runs `createRoom` (every
+geometry, material and instance buffer, 1.6 to 1.9 ms median) and the title resolver's `refresh()`,
+which fans a shelf out over 32 cache reads, inside the `setAnimationLoop` callback, in a frame of a
+flight. Neither can move: three.js objects can only be built on the thread that owns the context, and a
+room is built once per swap, not once per frame. Section 3 says that textures and geometries are
+disposed when a room is unloaded. That now means by the retirement policy: no later than the loaded
+room's first titled render, and for a replaced room that never rendered with titles, no later than the
+first render after it was replaced. Both sections carry a dated note pointing here.
+
+**The budget and the decision rule**, fixed before the code was measured:
+
+- **The quantity.** A frame's interval is the difference between its `requestAnimationFrame` timestamp
+  and the previous frame's, the interval that ends at that frame.
+- **The windows.** The swap frame and the two after it, and the release frame and the two after it.
+  With a titled room retiring, the release frame is the loaded room's first titled render: the frame
+  after the swap when the titles were cached, later otherwise. An untitled replaced room is gone by the
+  end of the swap frame, inside the swap window.
+- **Five scenarios**, at least 10 of each per run: (1) titles cached at the swap; (2) titles landing
+  late, as after a cut or a search from the room level; (3) the room level held for 600 frames before
+  descending; (4) the sequence A titled, B, C; (5) the unrendered sequence, in which A is titled, B is
+  loaded, B's titles and the swap to C land in one frame interval, so B holds shelves and never rendered
+  titled, and C's titles are late. Scenario 5 is the only one that separates "has rendered with titles"
+  from "has shelves": an earlier rule that read the atlas at load relinked there in 10 of 10 cycles and
+  in none of the other four (design review).
+- **Three runs**: Chromium on Metal, WebKit, and Chromium under a 4x CPU throttle, which stands in for
+  ADR-0005's slower machines.
+- **Warm-up** ends at the session's first titled render, because the titled program's first link happens
+  once on every page load. Each run opens a shelf in the opening room before its first scenario.
+- **The instrument** is a `linkProgram` wrapper installed with Playwright's `addInitScript`, and a
+  per-frame sample of `renderer.info.programs.length` and `renderer.info.render.calls`. A relink shows
+  only frame by frame (programs 6, 5, 6), and the wrapper counts links rather than timing them.
+- **The gates, in all three runs:** zero `linkProgram` calls after warm-up and a constant program count;
+  no frame with more than `MAX_DRAW_CALLS` draw calls; and in both Chromium runs, no interval in either
+  window over 32 ms (`docs/testing.md` §5). A failed interval gate is rerun once, the same scenario in
+  the same run, and is a stop if it reproduces. The link, program and draw-call gates are not rerun: a
+  single relink is a stop. The design review had seen two throttled intervals over 32 ms in 830 swaps,
+  34.2 and 33.1 ms, both at the release of a page's first swap, and neither reproduced on its rerun.
+- **WebKit's intervals are reported, not gated**, beside a baseline taken on `main` at 5ec68ab: the
+  first shelf's title upload in room 0 over 10 page loads, 30 intervals (the frame of the upload and the
+  two after it). That upload is M6's atlas send together with the first link of the titled program, so
+  as a threshold it would pass a relinked frame, which is why WebKit's gate is the zero-link rule.
+
+**What was measured**, on 2026-11-21, after the engine change: Apple M4, macOS 27.2.1, Node 22.23.1,
+Playwright 1.62.1; a production Vite build of a measurement page driving the real `viewer.ts` and
+`retirement.ts`, at 1280 x 720 and a device pixel ratio of 2; Chromium 151.0.7922.34 on ANGLE Metal,
+WebKit 26.5, and Chromium under a 4x CDP throttle. Each run is 7 page loads of 10 cycles: the five
+scenarios, with scenario 4 (A titled, B, C) run twice, C's titles cached and late, and the
+sequence A titled, B, C, D, in which A survives two swaps. The first session ran Metal twice, the
+same build and loads each time, then the throttle and WebKit; a review rerun the same day ran Metal,
+the throttle and WebKit once each. Every gate passed in all seven runs:
+
+- no `linkProgram` call after warm-up;
+- `programs.length` constant at 6;
+- no frame above 6 draw calls;
+- Chromium window intervals at most 18.7 ms in both first-session Metal runs, 18.8 ms under its
+  throttle, and 17.7 ms in both rerun Chromium runs, so no rerun of a scenario was triggered.
+
+Reported beside the gates, per run. "After warm-up" is every frame after a load's first titled
+render, which is frame 20 in every load: 13 020 frames per run. "In the windows" is the swap and
+release frames and the two after each; "outside" is every other frame after warm-up. Two intervals
+are measured. The gate and the over-20 ms column use the interval between the frame timestamps that
+`requestAnimationFrame` passes in, as in the gates above; the callback-start columns use the interval
+between the moments the callbacks began.
+
+| Run                | Callback-start max, in the windows | Callback-start max, outside | Frames over 20 ms after warm-up | Frame 2 over 20 ms             |
+| ------------------ | ---------------------------------- | --------------------------- | ------------------------------- | ------------------------------ |
+| first, Metal       | 18.9 ms                            | 33.8 ms (frame 21)          | 1 (0.01%), frame 21             | 5 of 7 loads, 31.4 to 35.2 ms  |
+| first, Metal again | 18.8 ms                            | 33.0 ms (frame 21)          | 0                               | 6 of 7 loads, 31.8 to 49.9 ms  |
+| first, 4x throttle | 19.0 ms                            | 35.2 ms (frame 21)          | 2 (0.02%), frame 21             | 7 of 7 loads, 98.2 to 216.2 ms |
+| first, WebKit      | 55 ms                              | 66 ms (frame 21)            | 82 (0.63%), 67 over 32 ms       | 7 of 7 loads, 30 to 46 ms      |
+| rerun, Metal       | 17.8 ms                            | 32.9 ms (frame 21)          | 0                               | 5 of 7 loads, 33.3 to 49.9 ms  |
+| rerun, 4x throttle | 22.0 ms                            | 43.5 ms (frame 21)          | 6 (0.05%), frame 21             | 7 of 7 loads, 99.8 to 199.2 ms |
+| rerun, WebKit      | 52 ms                              | 42 ms (frame 21)            | 66 (0.51%), 23 over 32 ms       | 7 of 7 loads, 33 to 38 ms      |
+
+Every Chromium frame over 20 ms after warm-up is frame 21, outside the windows, and over 32 ms. Its
+interval holds frame 20's warm-up: the page's first atlas write, then a render with the upload and the
+titled program's first link, one link in every load. In Chromium frame 20's callback took 11.7 to
+42.8 ms, its render 6.2 to 16.8 ms of that and the work before the render, the write among it, 5.4 to
+26.1 ms; under the throttle the work before the render is the larger share. A late release frame does
+a write and an upload with no link, and in Chromium its render took at most 2.9 ms and the rest of its
+callback at most 3.8 ms. So frame 21's cost is the render, with its link and upload, and a first
+write that later rooms do not repeat. Frame 2 is the first frame after the five base programs link. Outside the windows, and
+apart from frame 21, the only callback-start intervals over 20 ms were 21.5 and 23.0 ms in the
+rerun's throttled long scenario, and 21 to 26 ms in WebKit. In WebKit the time is in the render: a late
+release frame's render took up to 29 ms and the work before it at most 3 ms.
+
+WebKit, reported: the release windows' p90 was 39 to 50 ms and their maximum 41 to 55 ms, against the
+baseline's p90 of 34 ms (median 17, maximum 37). In a second session, a review rerun the same day, the
+release windows' p90 was 20 to 39 ms against baseline p90s of 41 and 51 ms, so the difference is
+within the spread between sessions. No program was linked in any release window. In that rerun, with
+each release moved 30 frames later in three of the scenarios (1, cached titles; 2, late titles; and
+the sequence A titled, B, C with late titles), 10 cycles each, the release windows were as slow (p90
+25 to 38 ms) and the moved disposals' own windows had a p90 of 17 to 18 ms. So a release window does
+not pay for the dispose, which leaves the new room's atlas write and upload, the same work the baseline
+window holds. The release's dispose took at most 1 ms.
+
+The search panel costs no frame at rest. Measured the same day in a production build of the app
+itself, at the same size and ratio, in Chromium on ANGLE Metal and in WebKit: at the room level, with
+the panel shown as the app shows it (386 x 223 CSS pixels over the canvas, 386 x 225 in WebKit) and
+then hidden by a `display: none` rule added with Playwright's `addStyleTag`, twice each per page load
+over 5 loads, 400 frames each time, so 4000 intervals per state and browser. In Chromium the median
+was 16.7 ms and the p99 17.6 ms in both states, with no interval over 17.7 ms. In WebKit, at its 1 ms
+resolution, the median was 17 ms and the p99 19 ms in both states, with two intervals of 21 ms in
+each. The design review had seen a median of 16.7 ms and a p99 of 17.7 ms either way.
+
+The measurement is not an automated test: `frames()` on the debug hook refuses by name until M10, and
+the e2e suite's Chromium renders in software on SwiftShader. A change to the engine that alters when a
+room is built or released re-takes it under the same gates.
+
+**Alternatives rejected.**
+
+- _Rebuild the machine for the new room._ Every subscriber is attached again, and the camera snaps.
+- _A `go-to-address` event legal at every level._ A sideways move at every level; `enter-room` at the
+  room level is the one sideways move that costs the camera no distance.
+- _Teach `motion` about rooms._ The choreography already holds both halves, and `motion` stays
+  geometric (ADR-0004).
+- _A `shownRoom` field in the choreography._ A second holder of the room on screen, beside the viewer.
+- _Leave both costs and record the frame._ The swap frame would be 50 to 62 ms in Chromium on the
+  fastest machine measured, over the 32 ms ceiling, on every search.
+- _Dispose after exactly one more render._ Keeps the five base programs and loses the titled variant,
+  which is linked again a frame later in 10 of 10 swaps.
+- _Pre-compile the new room's materials with `renderer.compile`._ The titled variant does not exist
+  until a shelf of titles is written, so at the swap there is nothing to compile it from.
+- _Share materials across rooms instead of deferring the disposal._ A larger change to the engine for
+  the same 18 ms.
+- _A hash of the linear index as the key._ ADR-0026 rejected hashed keys for the failure mode a
+  collision brings.
+
+**Consequence.**
+
+- `prefers-reduced-motion` makes every flight a cut: `createFlight` takes a `cut` getter, asked per
+  flight, and the choreography passes it the getter `src/main.ts` builds over one `MediaQueryList`. A
+  retreat and a descent are then two seeks in one call, and the swap lands one frame after the event.
+- The debug hook gains `memory()`: geometries, textures, the program count and `isRetiring`
+  (`docs/testing.md` §7). The counts include a retiring room, so the leak test in `e2e/search.spec.ts`
+  compares them after the first and the third cross-room search once `isRetiring` is `false`, and waits
+  on that condition rather than on a duration.
+- The two-rooms test reads every frame's draw calls, and `memory().isRetiring` after the app's
+  callback, from `e2e/webgl-probe.ts`'s `requestAnimationFrame` wrapper, and asserts that at least one
+  frame saw a room retiring, so a precondition that stopped holding is a red test. A titled room is kept
+  from the swap until the new room's first titled render, which can be a single frame: a
+  `waitForFunction` polling every 50 ms missed it in 10 of 10 WebKit loads on correct code (design
+  review).
+- `waitForIdle()` gains the search session as a source, and the choreography reports busy while the
+  machine and the screen name different rooms, even with the camera at rest.
+- The worker cache's `MAX_KEY_LENGTH` grows by the separator, which ADR-0032 predicted, and the fan-out
+  that record left alone is the one these keys remove.
 
 ---
 

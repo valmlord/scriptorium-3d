@@ -380,8 +380,8 @@ class RoomNames {
  *
  * The key is split rather than the whole linear index rendered because the room
  * dominates a 16 544-bit index while being the same for all 32 volumes of a
- * shelf: rendered whole, a shelf at a deep room is 32 conversions of it, 25.3 to
- * 32.3 ms in Chromium as measured for M7. Split, the room is rendered once
+ * shelf: rendered whole, a shelf at a deep room is 32 conversions of it, 26.3 to
+ * 32.3 ms in Chromium as measured for M7 (ADR-0034). Split, the room is rendered once
  * (`RoomNames`) and each key adds a remainder of at most four digits.
  */
 export class GenerationCache {
