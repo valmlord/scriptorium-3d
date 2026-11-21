@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BookAddress } from '@core/address';
 import { motionClockSeconds } from '@motion/clock';
 import type * as FlightModule from '@motion/flight';
-import type { Flight, FlightRoute, FlightStop } from '@motion/flight';
+import type { Flight, FlightOptions, FlightRoute, FlightStop } from '@motion/flight';
 import { createChoreography } from '@app/choreography';
 import type { Choreography } from '@app/choreography';
 
@@ -25,8 +25,8 @@ vi.mock('@motion/flight', async (importOriginal) => {
   const actual = await importOriginal<typeof FlightModule>();
   return {
     ...actual,
-    createFlight: (origin: FlightStop): Flight => {
-      const real = actual.createFlight(origin);
+    createFlight: (origin: FlightStop, options: FlightOptions): Flight => {
+      const real = actual.createFlight(origin, options);
       return {
         rig: real.rig,
         timeline: real.timeline,
@@ -83,6 +83,7 @@ function onScreen(): Choreography {
     showRoom: (room) => {
       shown = room;
     },
+    prefersReducedMotion: () => false,
   });
   built.push(choreography);
   return choreography;

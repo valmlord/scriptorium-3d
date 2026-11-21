@@ -83,7 +83,10 @@ export interface Choreography {
   dispose(): void;
 }
 
-/** How the choreography reaches the room on screen, which the viewer holds. */
+/**
+ * How the choreography reaches the room on screen, which the viewer holds, and
+ * whether the person at the screen wants the camera to move at all.
+ */
 export interface ChoreographyOptions {
   /** The room on screen now (`./shown-room.ts`). Read, never copied. */
   readonly shownRoom: () => bigint;
@@ -92,6 +95,13 @@ export interface ChoreographyOptions {
    * the room stop; afterwards `shownRoom` must answer `room`.
    */
   readonly showRoom: (room: bigint) => void;
+  /**
+   * Whether reduced motion is asked for, which makes every flight a cut.
+   * Injected rather than read here because this file has no DOM, and a getter
+   * because it is asked once per flight: a preference changed mid-session
+   * applies to the next one.
+   */
+  readonly prefersReducedMotion: () => boolean;
 }
 
 /** A promise and the function that settles it, for the change waiters. */
@@ -105,9 +115,9 @@ export function createChoreography(
   room: bigint,
   options: ChoreographyOptions
 ): Choreography {
-  const { shownRoom, showRoom } = options;
+  const { shownRoom, showRoom, prefersReducedMotion } = options;
   const navigation = createNavigation(room);
-  const flight = createFlight(ROOM_STOP);
+  const flight = createFlight(ROOM_STOP, { cut: prefersReducedMotion });
   let disposed = false;
 
   /**
@@ -116,9 +126,10 @@ export function createChoreography(
    *
    * `whenIdle` cannot wait on the flight then. A retreat can settle outside
    * any frame (a change of room asked for at the room level settles inside
-   * `dispatchAll`), so `flight.whenSettled()` is already resolved while the
-   * rooms disagree, and a loop over it would spin in microtasks with no frame
-   * ever running the swap that would end it. Each release replaces the
+   * `dispatchAll`, and under a cut every retreat settles on the spot), so
+   * `flight.whenSettled()` is already resolved while the rooms disagree, and
+   * a loop over it would spin in microtasks with no frame ever running the
+   * swap that would end it. Each release replaces the
    * deferred with a fresh one before resolving the old, so a waiter that
    * finds nothing changed waits on a pending promise again rather than on the
    * one that has just been resolved.

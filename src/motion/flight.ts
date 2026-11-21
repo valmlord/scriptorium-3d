@@ -52,6 +52,14 @@ import type { CameraPose, CameraRig } from './rig';
  * new route disagrees with the built one the flight first takes the playhead
  * back to the last stop the two still agree on. Both phases are the same
  * mechanism, so there is no special case to get wrong.
+ *
+ * **A cut is the same two steps with no time in them.** When the flight's
+ * `cut` option says so, the playhead is sought to each destination instead of
+ * tweened there, and the arrival runs in the same call. The retreat and the
+ * descent still happen in that order, so the timeline is still never rebuilt
+ * under the playhead; what disappears is only the movement between them. It is
+ * what `prefers-reduced-motion` asks for, and the reason the option is a getter
+ * is that the preference can change while the page is open.
  */
 
 /** gsap's timeline type, without naming its ambient namespace. */
@@ -101,6 +109,16 @@ const FLIGHT_EASE = 'power2.inOut';
  */
 const PLAYHEAD_EPSILON_SECONDS = 1e-6;
 
+/** How a flight is flown, as opposed to where it goes. */
+export interface FlightOptions {
+  /**
+   * Whether the next movement arrives at once rather than being flown. Asked
+   * each time the playhead is sent somewhere, never remembered, so a change
+   * of answer applies to the next flight and not to one already arrived.
+   */
+  readonly cut: () => boolean;
+}
+
 /** A flight in progress, or at rest. */
 export interface Flight {
   /** The rig the timeline writes. The render loop reads this object. */
@@ -132,7 +150,9 @@ export interface Flight {
  * stop: it is the one point all routes share, so it is where a retreat ends
  * and where a rebuilt route is appended from.
  */
-export function createFlight(origin: FlightStop): Flight {
+export function createFlight(origin: FlightStop, options: FlightOptions): Flight {
+  const { cut } = options;
+
   // Before any animation exists, so that gsap's own ticker never gets a frame
   // of this application's time (`./clock.ts`).
   takeOverGsapClock();
@@ -232,9 +252,16 @@ export function createFlight(origin: FlightStop): Flight {
     startPlayhead(targetIndex === -1 ? 0 : endSecondsOf(targetIndex));
   }
 
-  /** Begin, or keep, a playhead tween towards `destination`. */
+  /**
+   * Begin, or keep, a playhead tween towards `destination`, or under a cut
+   * take the playhead there at once.
+   */
   function startPlayhead(destination: number): void {
+    // Asked before the check below, so that a cut asked for while a tween is
+    // already on its way to the same place still ends that tween.
+    const isCut = cut();
     if (
+      !isCut &&
       playheadDestination !== null &&
       Math.abs(playheadDestination - destination) < PLAYHEAD_EPSILON_SECONDS
     ) {
@@ -244,14 +271,25 @@ export function createFlight(origin: FlightStop): Flight {
     }
     killPlayhead();
 
+    // Before the cut, because it is what ends one: a cut arrives, `advance`
+    // sends the playhead where it already is, and this settles it.
     if (Math.abs(timeline.time() - destination) < PLAYHEAD_EPSILON_SECONDS) {
       settle();
       return;
     }
 
+    if (isCut) {
+      // The legs are `fromTo`, so the rig after a seek is that time's values
+      // whatever lay between; the arrival runs now, which makes a retreat and
+      // the descent after it two seeks in this one call.
+      timeline.seek(destination);
+      onPlayheadArrived();
+      return;
+    }
+
     playheadDestination = destination;
-    // gsap's own scrub of this timeline: the one writer of the playhead, and
-    // the only animation a retarget ever kills.
+    // gsap's own scrub of this timeline: the one writer of the playhead
+    // outside a cut, and the only animation a retarget ever kills.
     playhead = timeline.tweenTo(destination, {
       ease: FLIGHT_EASE,
       onComplete: onPlayheadArrived,

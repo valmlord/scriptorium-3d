@@ -75,6 +75,10 @@ const viewer = createViewer(canvas, {
 
 viewer.loadRoom(FIRST_ROOM);
 
+// One query for the whole session, read on every flight rather than once, so
+// a preference changed while the page is open applies to the next flight.
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+
 const choreography = createChoreography(FIRST_ROOM, {
   shownRoom: shownRoomOf(viewer),
   showRoom: (room) => {
@@ -83,6 +87,7 @@ const choreography = createChoreography(FIRST_ROOM, {
     // was asked for while the last room was on screen.
     titles.refresh();
   },
+  prefersReducedMotion: () => reducedMotion.matches,
 });
 const client = new GenerationClient(createGenerationWorker());
 

@@ -69,7 +69,11 @@ interface OnScreen {
   readonly shownRoomReads: () => number;
 }
 
-function onScreen(): OnScreen {
+/**
+ * `prefersReducedMotion` is the test's own getter, so a test can change its
+ * answer between two events; by default every flight is flown.
+ */
+function onScreen(prefersReducedMotion: () => boolean = () => false): OnScreen {
   let shown = ROOM;
   let reads = 0;
   const swaps: bigint[] = [];
@@ -84,6 +88,7 @@ function onScreen(): OnScreen {
       rigsAtSwaps.push(choreography.rig());
       shown = room;
     },
+    prefersReducedMotion,
   });
   built.push(choreography);
   return { choreography, swaps, rigsAtSwaps, shownRoomReads: () => reads };
@@ -344,6 +349,22 @@ describe('waiting across a change of room', () => {
     expect(await hasSettled(waiting)).toBe(true);
   });
 
+  it('whenIdle does not spin while the rooms disagree, and under a cut has resolved after the next frame', async () => {
+    const { choreography, shownRoomReads } = onScreen(() => true);
+    choreography.openVolume(ELSEWHERE);
+    const waiting = choreography.whenIdle();
+
+    await flushMicrotasks(SPIN_MICROTASKS);
+    const readsWhileDisagreeing = shownRoomReads();
+    // The frame first, for the reason above.
+    tick(choreography);
+
+    expect(readsWhileDisagreeing).toBeLessThanOrEqual(5);
+    // The swap and the descent are both in that one frame: nothing is left to
+    // fly, so no further frame is needed for the wait to end.
+    expect(await hasSettled(waiting)).toBe(true);
+  });
+
   it('whenIdle resolves when the rooms agree again without a swap', async () => {
     const { choreography, swaps } = onScreen();
     choreography.openVolume(ELSEWHERE);
@@ -391,6 +412,24 @@ describe('waiting across a change of room', () => {
     }
 
     expect(swaps).toEqual([]);
+  });
+});
+
+describe('reduced motion', () => {
+  it('prefersReducedMotion is read per flight', () => {
+    let isReduced = false;
+    const { choreography } = onScreen(() => isReduced);
+    choreography.openVolume(TARGET);
+    // Flown: the camera has not left the room yet.
+    expect(choreography.isIdle()).toBe(false);
+    flyOn(choreography);
+
+    isReduced = true;
+    choreography.back();
+
+    // Cut: at the shelf in the same call, with no frame run.
+    expect(choreography.isIdle()).toBe(true);
+    expectRigAt(choreography.rig(), shelfPose(TARGET.wall, TARGET.shelf));
   });
 });
 

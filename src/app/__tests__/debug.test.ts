@@ -34,6 +34,7 @@ function installedHook(): {
     showRoom: (room) => {
       shown = room;
     },
+    prefersReducedMotion: () => false,
   });
   const target: DebugHookTarget = {};
   installDebugHook(target, {
