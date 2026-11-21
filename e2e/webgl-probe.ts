@@ -2,13 +2,14 @@ import type { Page } from '@playwright/test';
 
 /**
  * A probe installed in the page before the app loads, which counts WebGL draw
- * calls and reads the drawing buffer back.
+ * calls, reads the drawing buffer back, and notes whether a replaced room was
+ * being kept in each frame.
  *
- * Why this rather than `renderer.info.render.calls`: reaching the renderer
- * from a test needs `window.__scriptorium`, and that debug hook is M5's
- * (`docs/testing.md` §7). Counting the GL calls themselves needs nothing from
- * the application at all — and it is a level below three.js' own bookkeeping,
- * so it cannot agree with the renderer about a draw call that did not happen.
+ * Why the draw calls are counted here rather than read from
+ * `renderer.info.render.calls`: counting the GL calls themselves needs nothing
+ * from the application at all, and it is a level below three.js' own
+ * bookkeeping, so it cannot agree with the renderer about a draw call that did
+ * not happen.
  *
  * Why the pixels are read inside the animation callback: a WebGL drawing
  * buffer is cleared once the frame is composited unless `preserveDrawingBuffer`
@@ -16,6 +17,14 @@ import type { Page } from '@playwright/test';
  * `requestAnimationFrame` and reading immediately after the application's own
  * callback returns puts the read in the same task as the draw, where the
  * buffer is still there, and needs no renderer option changed for the test.
+ *
+ * Why `memory().isRetiring` is read in the same place: a room replaced by a
+ * search is kept only from the swap until the new room's first titled render,
+ * which can be a single frame (`src/engine/retirement.ts`). Read after the
+ * application's callback, in every frame that drew, it is the state that
+ * frame's draw calls were issued under. Polling it from Playwright misses it:
+ * a `waitForFunction` every 50 ms, the interval `readWebGLProbe` uses, missed
+ * it in 10 of 10 WebKit loads on correct code when M7 measured it.
  *
  * This is not a pixel-diff screenshot, which `docs/testing.md` §6 rules out:
  * nothing here is compared against a stored image. It asks one question a
@@ -29,6 +38,11 @@ export interface FrameDrawCalls {
   instanced: number[];
   /** How many non-instanced draw calls the frame issued. */
   plain: number;
+  /**
+   * `window.__scriptorium.memory().isRetiring` once the frame had drawn, or
+   * `null` in a build without the debug hook.
+   */
+  isRetiring: boolean | null;
 }
 
 /** One texture upload: how large it was, in pixels. */
@@ -200,7 +214,7 @@ export async function installWebGLProbe(page: Page): Promise<void> {
     const originalRequestFrame = window.requestAnimationFrame.bind(window);
     window.requestAnimationFrame = (callback: FrameRequestCallback): number =>
       originalRequestFrame((time) => {
-        const frame: FrameDrawCalls = { instanced: [], plain: 0 };
+        const frame: FrameDrawCalls = { instanced: [], plain: 0, isRetiring: null };
         current = frame;
         try {
           callback(time);
@@ -214,6 +228,7 @@ export async function installWebGLProbe(page: Page): Promise<void> {
         if (frame.instanced.length === 0 && frame.plain === 0) {
           return;
         }
+        frame.isRetiring = window.__scriptorium?.memory().isRetiring ?? null;
         report.frames.push(frame);
         // Read inside the callback, where the buffer the frame just drew into
         // has not been composited away yet.
