@@ -47,6 +47,47 @@ describe('a well-formed response', () => {
     });
   });
 
+  it('narrows a found address and offset, keeping the room a bigint', () => {
+    const parsed = parseProtocolResponse({
+      kind: 'found',
+      id: ID,
+      address: ADDRESS,
+      offset: 17,
+    });
+
+    expect(parsed).toEqual({
+      ok: true,
+      response: { kind: 'found', id: ID, address: ADDRESS, offset: 17 },
+    });
+  });
+
+  it('leaves the bound of a found offset to the client, which holds the query', () => {
+    // A query of n code points starts at 0 to PAGE_LENGTH - n, and only the
+    // request knows n; `takeFound` in `client.ts` refuses this one.
+    const parsed = parseProtocolResponse({
+      kind: 'found',
+      id: ID,
+      address: ADDRESS,
+      offset: -1,
+    });
+
+    expect(parsed).toMatchObject({ ok: true });
+  });
+
+  it('narrows a protocol error refusing a misshapen search', () => {
+    const parsed = parseProtocolResponse({
+      kind: 'protocol-error',
+      id: ID,
+      fault: 'malformed-search',
+      detail: "'query' must be a string, received number",
+    });
+
+    expect(parsed).toMatchObject({
+      ok: true,
+      response: { id: ID, fault: 'malformed-search' },
+    });
+  });
+
   it.each(['pre-emptive', 'already-cancelled', 'reply-in-flight'])(
     'narrows a cancel acknowledged as %s',
     (disposition) => {
@@ -208,6 +249,47 @@ describe('a response whose body is unusable', () => {
       expect(parsed).toMatchObject({ ok: false, id: ID });
     }
   );
+
+  it('refuses a found response carrying no address', () => {
+    expect(parseProtocolResponse({ kind: 'found', id: ID, offset: 0 })).toMatchObject({
+      ok: false,
+      id: ID,
+      detail: expect.stringContaining("'address'"),
+    });
+  });
+
+  it('refuses a found room that is a number, exactly as for a located one', () => {
+    const parsed = parseProtocolResponse({
+      kind: 'found',
+      id: ID,
+      address: { ...ADDRESS, room: 7 },
+      offset: 0,
+    });
+
+    expect(parsed).toMatchObject({
+      ok: false,
+      id: ID,
+      detail: expect.stringContaining("'address.room'"),
+    });
+  });
+
+  it('refuses a found offset that is not a number, naming its type and not its value', () => {
+    const value = 'the offset a skewed worker sent';
+
+    const parsed = parseProtocolResponse({
+      kind: 'found',
+      id: ID,
+      address: ADDRESS,
+      offset: value,
+    });
+
+    expect(parsed).toMatchObject({
+      ok: false,
+      id: ID,
+      detail: "'offset' must be a number, received string",
+    });
+    expect(JSON.stringify(parsed)).not.toContain(value);
+  });
 
   it('refuses a disposition that is none of the three', () => {
     expect(

@@ -2437,3 +2437,104 @@ the worker is still generating, and a turn superseded by a cache hit in its own 
   bundle in `src/__tests__/production-bundle.test.ts`: the main-thread chunk must not contain
   `DOMAIN_TAG` and the worker's must. ADR-0029's open paragraph is closed by that test rather than
   by this sentence.
+
+---
+
+## ADR-0033 — Search crosses the thread boundary as a message, and its random bytes belong to the worker's loop
+
+**Decision.** A search is a protocol message. The main thread sends
+`{ kind: 'search', id, query, mode }`; the worker calls `core`'s `search(query, mode, undefined,
+random)` unmodified and answers `{ kind: 'found', id, address, offset }`. The protocol carries no
+offset. The random source that places and pads the query is owned by the worker's message loop
+(`worker/loop.ts`), which passes `core`'s `defaultRandomSource` to the handler as an argument; the
+handler reaches for no source of its own.
+
+**Why a message.** `search` then ships exactly as `core`'s property, golden and mutation tests cover
+it, and the generation surface stays whole on one thread (ADR-0005, ADR-0029). The alternative, building
+the padded page on the main thread and sending it to `locate`, would move `pad`, `randomBelow` and
+`fromBytesBE` into the address model and redraw ADR-0029's table, and `search` would then exist twice,
+with the tests covering the copy that does not ship. It is not cheaper either: random padding is about
+0.5 ms over `locate` in Chromium on an Apple M4 and 0.24 ms in Node, so roughly 2 ms on ADR-0005's
+slowest machine (an estimate from that record's spread, not a measurement), over the ~1 ms that
+architecture §2 allows the main thread. On the worker it is one call per submitted query, never one
+per frame.
+
+**Why the loop owns the source and the handler takes it.** `handler.ts` used to say that the same
+payload against the same state always produces the same outcome, and that sentence is what made every
+handler case a unit test rather than an assertion about a thread. A handler that called `search` with
+`core`'s default source would have made it false without a word, and no handler test could have pinned
+the padding. With the source as an argument the sentence reads "the same payload, state and random
+bytes always produce the same outcome", which is what a test pins: the handler's tests run a seeded
+splitmix32 source with a byte cap and assert that `found` is exactly the hit `core` computes for the
+same bytes, in both modes, and that the random hit differs from the spaces hit. The loop already owns
+the handler's state, so it owns the source beside it.
+
+**Why `Math.random` is acceptable on this thread.** ADR-0011 gave two reasons for `core`'s default
+source being `Math.random`-backed. The one that holds on any thread is that these bytes choose which
+book a reader is shown, not a key, so being unpredictable to an attacker is not required of them, and
+that is the reason this record rests on. The other, that `core` may not depend on the ambient `crypto`
+global, does not bind the worker loop, which is not `core`. So `Math.random` here is a choice and not a
+constraint.
+
+**Why no offset.** No caller in this milestone chooses one: the panel searches and the worker places
+the query. A payload that does send an `offset` is refused as `unexpected-field`, tested with
+`Object.hasOwn(payload, 'offset')` exactly as `parseTitleRequest` tests `book.page`, because its sender
+believes the offset will be honoured and would be shown the query somewhere else. Every other unknown
+field is ignored, which is the handler's parse policy for every message. A `query` that is not a
+string, or a `mode` that is neither of the two pad modes, is refused under a new fault,
+`malformed-search`.
+
+**Why the query is validated on both sides.** The main thread normalizes and refuses the query with
+typed errors and positions before it is sent, because the positions of unknown symbols do not survive
+`SerializedError`, which carries a name and a message and nothing else. `core` refuses a malformed
+query again in the worker, which is the boundary rule, and that refusal comes back as `failed` with the
+error's name.
+
+**`found` is narrowed against the request it answers.** `response.ts` narrows the address by shape, as
+it does for `located`, and the offset to a number. The bound belongs to the request: a query of `n`
+code points starts at an integer from `0` to `PAGE_LENGTH - n`, and only the client still holds the
+query, so `takeFound` in `client.ts` refuses any other offset as a `MalformedResponseError` naming the
+bound and the offset. An offset that is not a number is named by its type and never echoed.
+
+**An error never prints the query.** `describeRequest` names a search by the length of its query in
+code points. The query is what the user typed, up to 3200 symbols of it, and an error message ends up
+on a console and in a bug report; the error's `request` field still holds the text for anything that
+has a reason to show it.
+
+**The session's identity rule, and where it differs from ADR-0032.** The search session in `ui` acts on
+a reply only while its request is still the current one, and it compares the request by identity, not
+the query by equality, for a hit and a failure alike. Two submits of the same text are two searches
+with two random offsets, so equal text says nothing about which reply is current. ADR-0032 lets the
+reader's `accept` take any reply carrying the right text for the open page, because a page has exactly
+one right text. A hit has no such right text, so a superseded reply, success or failure, is a
+non-event. Every submit cancels the search in flight before the new input is judged, so a refused
+submit leaves nothing in flight, and a navigation event the session did not dispatch cancels it too:
+the latest intent wins, as in ADR-0030.
+
+**ADR-0026 amended.** ADR-0026 calls `locate` "the one `core` call that always crosses the thread
+boundary", and its consequence calls `locate` the one call whose `GenerationRequest.ids` is never
+empty. Both sentences now name two calls, `locate` and `search`. A search is never cached, and not
+only for `locate`'s reason: two searches for the same text are two different answers, so a cached
+answer would be a wrong one.
+
+**Alternatives rejected.**
+
+- _Build the padded page on the main thread and send it to `locate`._ The figures and the restructuring
+  above: about 2 ms on the slowest machine, `search` in two copies with the tested one not shipping, and
+  the random source on the main thread.
+- _The main thread sends the random bytes._ Rejection sampling consumes a variable number of bytes, so
+  this would be a seed and a PRNG, a new mechanism for reproducibility that nobody asked for.
+- _The handler calls `search` with `core`'s default source._ The handler's determinism would become
+  false silently, and no handler test could pin the padding.
+- _An offset in the protocol._ A field with no caller, and a sender that set it would expect it to be
+  honoured; refusing it by name says so.
+
+**Consequence.**
+
+- `handleProtocolMessage` takes the random source as a third argument, and every caller passes one:
+  the loop passes `defaultRandomSource`, and the tests pass sources of their own.
+- A search waits in the worker's queue behind whatever is ahead of it, up to a shelf of 32 titles,
+  14.8 to 45.0 ms on ADR-0005's machines. Accepted: it is once per submitted query, and the titles of
+  a shelf the camera has left are cancelled.
+- The handler's header and ADR-0026's two sentences are the places this record changes; the second is
+  amended here rather than edited in place, so ADR-0026 still reads as it was decided.

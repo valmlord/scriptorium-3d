@@ -505,6 +505,248 @@ describe('cancellation', () => {
   });
 });
 
+describe('searching', () => {
+  const QUERY = 'вавилонская библиотека';
+  /** The query's length in code points, counted here rather than by the client. */
+  const QUERY_LENGTH = Array.from(QUERY).length;
+  /** The last offset a query of `QUERY_LENGTH` code points can start at. */
+  const LAST_OFFSET = PAGE_LENGTH - QUERY_LENGTH;
+
+  it('sends the query as given, spaces and all, and the mode, and no offset, under its own id', () => {
+    // `'spaces'` because every other search here sends `'random'`, so a
+    // client that fixed the mode would pass them all. The spaces at both ends
+    // are part of the query, kept as typed (SPEC §2 rule 4).
+    const padded = `  ${QUERY} `;
+    const worker = new ScriptedWorker();
+    const client = new GenerationClient(worker);
+
+    client.search(padded, 'spaces');
+
+    expect(worker.sent).toEqual([
+      { kind: 'search', id: FIRST_REQUEST_ID, query: padded, mode: 'spaces' },
+    ]);
+  });
+
+  it('resolves with the address and the offset the worker found', async () => {
+    const worker = new ScriptedWorker();
+    const client = new GenerationClient(worker);
+    const request = client.search(QUERY, 'spaces');
+
+    worker.reply({
+      kind: 'found',
+      id: onlyId(request),
+      address: SECOND_ADDRESS,
+      offset: 9,
+    });
+
+    await expect(request.result).resolves.toEqual({
+      address: SECOND_ADDRESS,
+      offset: 9,
+    });
+  });
+
+  it('resolves through the real loop at a page that holds the query at the offset', async () => {
+    const client = new GenerationClient(new LoopbackWorker());
+
+    const hit = await client.search(QUERY, 'random').result;
+
+    expect(getPage(hit.address).slice(hit.offset, hit.offset + QUERY_LENGTH)).toBe(
+      QUERY
+    );
+  });
+
+  it('search is never served from the cache', async () => {
+    const cache = new GenerationCache();
+    const worker = new ScriptedWorker();
+    const client = new GenerationClient(worker, cache);
+    const first = client.search(QUERY, 'random');
+    worker.reply({
+      kind: 'found',
+      id: onlyId(first),
+      address: SECOND_ADDRESS,
+      offset: 0,
+    });
+    await first.result;
+
+    const second = client.search(QUERY, 'random');
+
+    // The same text twice is two searches with two random offsets, so the
+    // second has to cross the boundary as the first did.
+    expect(second.ids).toEqual([FIRST_REQUEST_ID + 1]);
+    expect(worker.sent).toHaveLength(2);
+    expect(cache.pageCount).toBe(0);
+    expect(cache.titleCount).toBe(0);
+  });
+
+  it('accepts an offset of PAGE_LENGTH minus the query length, the last one it can have', async () => {
+    const worker = new ScriptedWorker();
+    const client = new GenerationClient(worker);
+    const request = client.search(QUERY, 'random');
+
+    worker.reply({
+      kind: 'found',
+      id: onlyId(request),
+      address: SECOND_ADDRESS,
+      offset: LAST_OFFSET,
+    });
+
+    await expect(request.result).resolves.toEqual({
+      address: SECOND_ADDRESS,
+      offset: LAST_OFFSET,
+    });
+  });
+
+  it('accepts offset 0 for a query of a whole page, the one offset it can have', async () => {
+    const wholePage = 'а'.repeat(PAGE_LENGTH);
+    const worker = new ScriptedWorker();
+    const client = new GenerationClient(worker);
+    const request = client.search(wholePage, 'random');
+
+    worker.reply({
+      kind: 'found',
+      id: onlyId(request),
+      address: SECOND_ADDRESS,
+      offset: 0,
+    });
+
+    await expect(request.result).resolves.toEqual({
+      address: SECOND_ADDRESS,
+      offset: 0,
+    });
+  });
+
+  it("found with an offset above PAGE_LENGTH minus the query's length is a malformed response", async () => {
+    const worker = new ScriptedWorker();
+    const client = new GenerationClient(worker);
+    const request = client.search(QUERY, 'random');
+    const id = onlyId(request);
+
+    worker.reply({
+      kind: 'found',
+      id,
+      address: SECOND_ADDRESS,
+      offset: LAST_OFFSET + 1,
+    });
+
+    const error = await rejection(request.result);
+    expect(error).toBeInstanceOf(MalformedResponseError);
+    expect(error).toMatchObject({
+      id,
+      detail: `an offset of ${String(LAST_OFFSET + 1)}, and a query of ${String(QUERY_LENGTH)} code points starts at an integer from 0 to ${String(LAST_OFFSET)}`,
+    });
+  });
+
+  it.each([
+    ['negative', -1],
+    ['fractional', 1.5],
+    ['NaN', Number.NaN],
+  ])('refuses a found offset that is %s', async (_description, offset) => {
+    const worker = new ScriptedWorker();
+    const client = new GenerationClient(worker);
+    const request = client.search(QUERY, 'random');
+
+    worker.reply({
+      kind: 'found',
+      id: onlyId(request),
+      address: SECOND_ADDRESS,
+      offset,
+    });
+
+    const error = await rejection(request.result);
+    expect(error).toBeInstanceOf(MalformedResponseError);
+    expect(error).toMatchObject({
+      detail: expect.stringContaining(`an offset of ${String(offset)},`),
+    });
+  });
+
+  it('refuses a found offset that is not a number by its type, never echoing it', async () => {
+    const worker = new ScriptedWorker();
+    const client = new GenerationClient(worker);
+    const request = client.search(QUERY, 'random');
+    const offset = 'the offset a skewed worker sent';
+
+    worker.reply({
+      kind: 'found',
+      id: onlyId(request),
+      address: SECOND_ADDRESS,
+      offset,
+    });
+
+    const error = await rejection(request.result);
+    expect(error).toBeInstanceOf(MalformedResponseError);
+    expect(error).toMatchObject({
+      detail: "'offset' must be a number, received string",
+    });
+    expect(String(error)).not.toContain(offset);
+  });
+
+  it('measures the query in code points, not in UTF-16 units', async () => {
+    // Two astral characters are four units and two code points. The worker
+    // would refuse them, but the bound is the client's, and counting units
+    // would refuse the last two offsets a two-symbol query can have.
+    const astral = '\u{1F600}\u{1F600}';
+    const worker = new ScriptedWorker();
+    const client = new GenerationClient(worker);
+    const request = client.search(astral, 'random');
+
+    worker.reply({
+      kind: 'found',
+      id: onlyId(request),
+      address: SECOND_ADDRESS,
+      offset: PAGE_LENGTH - 2,
+    });
+
+    await expect(request.result).resolves.toMatchObject({ offset: PAGE_LENGTH - 2 });
+  });
+
+  it('refuses a hit for a query longer than a page without printing a range', async () => {
+    const worker = new ScriptedWorker();
+    const client = new GenerationClient(worker);
+    const request = client.search('а'.repeat(PAGE_LENGTH + 1), 'random');
+
+    worker.reply({
+      kind: 'found',
+      id: onlyId(request),
+      address: SECOND_ADDRESS,
+      offset: 0,
+    });
+
+    const error = await rejection(request.result);
+    expect(error).toBeInstanceOf(MalformedResponseError);
+    expect(error).toMatchObject({
+      detail: `a hit for a query of ${String(PAGE_LENGTH + 1)} code points, and a page holds ${String(PAGE_LENGTH)}`,
+    });
+  });
+
+  it('refuses a located address where a search was asked for', async () => {
+    const worker = new ScriptedWorker();
+    const client = new GenerationClient(worker);
+    const request = client.search(QUERY, 'random');
+
+    worker.reply({ kind: 'located', id: onlyId(request), address: SECOND_ADDRESS });
+
+    expect(await rejection(request.result)).toMatchObject({
+      detail: expect.stringContaining("expected a 'found'"),
+    });
+  });
+
+  it("a cancelled search's error names its kind and length and not its query", async () => {
+    const client = new GenerationClient(new ScriptedWorker());
+    const request = client.search(QUERY, 'random');
+
+    request.cancel();
+
+    const error = await rejection(request.result);
+    expect(error).toBeInstanceOf(CancelledRequestError);
+    expect(error).toMatchObject({
+      message: expect.stringContaining(
+        `a search for a query of ${String(QUERY_LENGTH)} code points`
+      ),
+    });
+    expect(String(error)).not.toContain('вавилон');
+  });
+});
+
 describe('warm-up', () => {
   it('generates one page and discards it rather than caching it', async () => {
     const cache = new GenerationCache();

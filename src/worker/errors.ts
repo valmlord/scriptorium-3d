@@ -223,9 +223,14 @@ export class WorkerScopeUnavailableError extends Error {
  * Name what a request asked for, for an error message.
  *
  * The address is deliberately not rendered — see this module's header. The
- * switch is exhaustive over `ProtocolRequest` with no `default`, so a fourth
+ * switch is exhaustive over `ProtocolRequest` with no `default`, so a fifth
  * request kind stops this function returning on every path, which is a compile
  * error rather than an error message that silently says `undefined`.
+ *
+ * A search is named by its query's length and never by its text. The query is
+ * what the user typed, up to `PAGE_LENGTH` symbols of it, and an error message
+ * ends up on a console and in a bug report; the `request` field still holds
+ * the text for anything that has a reason to show it.
  */
 function describeRequest(request: ProtocolRequest): string {
   switch (request.kind) {
@@ -235,5 +240,7 @@ function describeRequest(request: ProtocolRequest): string {
       return 'a title';
     case 'locate':
       return "a page's address";
+    case 'search':
+      return `a search for a query of ${String(Array.from(request.query).length)} code points`;
   }
 }

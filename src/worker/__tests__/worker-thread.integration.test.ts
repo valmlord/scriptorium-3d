@@ -260,6 +260,21 @@ describe('a real worker thread', () => {
     expect(located).toEqual(address);
   });
 
+  it('a search crosses a real worker thread and returns an address whose page holds the query at the offset', async () => {
+    const client = new GenerationClient(new NodeWorkerAdapter(spawnWorker()));
+    const query = 'вавилонская библиотека';
+
+    // The production loop draws the offset and the padding from its own
+    // source, so the assertion is on what the hit means rather than on which
+    // hit it is: the page at that address, read back through the thread,
+    // holds the query exactly where the offset says.
+    const hit = await client.search(query, 'random').result;
+    const page = await client.page(hit.address).result;
+
+    expect(typeof hit.address.room).toBe('bigint');
+    expect(page.slice(hit.offset, hit.offset + Array.from(query).length)).toBe(query);
+  });
+
   it('warms up through the thread without caching the page it threw away', async () => {
     const cache = new GenerationCache();
     const client = new GenerationClient(new NodeWorkerAdapter(spawnWorker()), cache);

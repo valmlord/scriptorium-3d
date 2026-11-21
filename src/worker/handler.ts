@@ -1,5 +1,5 @@
-import { getPage, getTitle, locate } from '@core/index';
-import type { BookAddress } from '@core/index';
+import { getPage, getTitle, locate, search } from '@core/index';
+import type { BookAddress, PadMode, RandomSource } from '@core/index';
 import { FIRST_REQUEST_ID } from './protocol';
 import type {
   CancelDisposition,
@@ -18,12 +18,14 @@ import type {
  * the next handler state out.
  *
  * It is a **pure function**. Nothing is posted, nothing is mutated — not the
- * payload, not the state passed in — and no clock or random source is read, so
- * the same payload against the same state always produces the same outcome.
- * That is what lets every case below be a unit test instead of an assertion
- * about a thread, and it is why the state is an argument rather than a
- * module-level variable: the thing that owns the `MessagePort` owns the state,
- * and the handler only computes.
+ * payload, not the state passed in — and no clock is read. A `search` places
+ * and pads its query with random bytes, which arrive as an argument rather
+ * than being reached for (ADR-0011, ADR-0033), so the same payload, state and
+ * random bytes always produce the same outcome, and a test that pins the bytes
+ * pins the answer. That is what lets every case below be a unit test instead
+ * of an assertion about a thread, and it is why the state and the source are
+ * arguments rather than module-level variables: the thing that owns the
+ * `MessagePort` owns them both, and the handler only computes.
  *
  * **Totality.** The payload arrives as `unknown`. It is untrusted data crossing
  * a boundary, so it is narrowed at runtime rather than declared
@@ -86,11 +88,13 @@ export function createProtocolHandlerState(): ProtocolHandlerState {
  * Answer one payload.
  *
  * The payload is whatever `postMessage` delivered. The returned state replaces
- * the one passed in; the one passed in is left untouched.
+ * the one passed in; the one passed in is left untouched. `random` is read
+ * only by a `search` that reaches `core`, and only to place and pad its query.
  */
 export function handleProtocolMessage(
   payload: unknown,
-  state: ProtocolHandlerState
+  state: ProtocolHandlerState,
+  random: RandomSource
 ): ProtocolHandlerOutcome {
   const parsed = parseProtocolMessage(payload);
   if (!parsed.ok) {
@@ -111,7 +115,7 @@ export function handleProtocolMessage(
   if (parsed.message.kind === 'cancel') {
     return handleCancel(parsed.message, state);
   }
-  return handleRequest(parsed.message, state);
+  return handleRequest(parsed.message, state, random);
 }
 
 /**
@@ -146,7 +150,8 @@ function handleCancel(
 /** A request is dropped, refused as stale, or computed. */
 function handleRequest(
   message: ProtocolRequest,
-  state: ProtocolHandlerState
+  state: ProtocolHandlerState,
+  random: RandomSource
 ): ProtocolHandlerOutcome {
   const { id } = message;
   // These two branches cannot both apply: the state invariant keeps every
@@ -166,7 +171,7 @@ function handleRequest(
       response: { kind: 'stale', id, highestIdSeen: state.highestIdSeen },
     };
   }
-  return { state: advance(state, id), response: computeResponse(message) };
+  return { state: advance(state, id), response: computeResponse(message, random) };
 }
 
 /**
@@ -198,10 +203,18 @@ function advance(state: ProtocolHandlerState, id: RequestId): ProtocolHandlerSta
  * something indistinguishable from an out-of-range address.
  *
  * The switch has no `default`: it is exhaustive over `ProtocolRequest`, and a
- * fourth request kind would make this function stop returning on every path,
+ * fifth request kind would make this function stop returning on every path,
  * which is a compile error rather than a silently unanswered message.
+ *
+ * A `search` passes no offset, because the protocol carries none (ADR-0033),
+ * so `core` draws it from `random` as well as the padding. Its refusals, an
+ * empty or over-long query or a symbol outside the alphabet, are `core`'s and
+ * come back as `failed` like any other.
  */
-function computeResponse(message: ProtocolRequest): ProtocolResponse {
+function computeResponse(
+  message: ProtocolRequest,
+  random: RandomSource
+): ProtocolResponse {
   try {
     switch (message.kind) {
       case 'page':
@@ -210,6 +223,15 @@ function computeResponse(message: ProtocolRequest): ProtocolResponse {
         return { kind: 'title', id: message.id, title: getTitle(message.book) };
       case 'locate':
         return { kind: 'located', id: message.id, address: locate(message.page) };
+      case 'search': {
+        const hit = search(message.query, message.mode, undefined, random);
+        return {
+          kind: 'found',
+          id: message.id,
+          address: hit.address,
+          offset: hit.offset,
+        };
+      }
     }
   } catch (thrown: unknown) {
     return { kind: 'failed', id: message.id, error: serializeThrown(thrown) };
@@ -253,10 +275,10 @@ type ParseResult =
  *
  * Unknown *extra* properties are ignored on purpose: rejecting them would make
  * adding an optional field to any message a breaking change for every older
- * client. The one exception is `book.page` — not an unknown field but a known
- * one in the wrong message, which means the sender has the wrong idea of what a
- * title is, and ignoring that would be the silent acceptance
- * `architecture.md` §4 rules out.
+ * client. The exceptions are `book.page` and a search's `offset`: not unknown
+ * fields but known ones in the wrong message, which means the sender has the
+ * wrong idea of what the message does, and ignoring that would be the silent
+ * acceptance `architecture.md` §4 rules out.
  */
 function parseProtocolMessage(payload: unknown): ParseResult {
   if (Array.isArray(payload)) {
@@ -300,6 +322,8 @@ function parseProtocolMessage(payload: unknown): ParseResult {
       return parseTitleRequest(id, payload.book);
     case 'locate':
       return parseLocateRequest(id, payload.page);
+    case 'search':
+      return parseSearchRequest(id, payload);
   }
 }
 
@@ -349,6 +373,48 @@ function parseLocateRequest(id: RequestId, page: unknown): ParseResult {
     );
   }
   return { ok: true, message: { kind: 'locate', id, page } };
+}
+
+/**
+ * A search carries no offset (ADR-0033), and one that sends it is refused by
+ * name rather than ignored: its sender expects the query at that offset, and
+ * would be shown a page with it somewhere else. Tested with `Object.hasOwn`,
+ * as `book.page` is for a title, so an `offset: undefined` is refused too.
+ */
+function parseSearchRequest(
+  id: RequestId,
+  payload: Record<string, unknown>
+): ParseResult {
+  if (Object.hasOwn(payload, 'offset')) {
+    return failure(
+      id,
+      'unexpected-field',
+      `'offset' is not part of a search: the worker chooses where the query starts`
+    );
+  }
+  const { query, mode } = payload;
+  if (typeof query !== 'string') {
+    return failure(
+      id,
+      'malformed-search',
+      `'query' must be a string, received ${describe(query)}`
+    );
+  }
+  if (typeof mode !== 'string') {
+    return failure(
+      id,
+      'malformed-search',
+      `'mode' must be a string, received ${describe(mode)}`
+    );
+  }
+  if (!isPadMode(mode)) {
+    return failure(
+      id,
+      'malformed-search',
+      `'mode' names neither of the pad modes, 'spaces' and 'random'`
+    );
+  }
+  return { ok: true, message: { kind: 'search', id, query, mode } };
 }
 
 type BookParse =
@@ -404,7 +470,14 @@ const KNOWN_KINDS: Record<MessageKind, true> = {
   page: true,
   title: true,
   locate: true,
+  search: true,
   cancel: true,
+};
+
+/** Keyed by `PadMode`, so a third mode in `core` does not compile until listed. */
+const KNOWN_PAD_MODES: Record<PadMode, true> = {
+  spaces: true,
+  random: true,
 };
 
 /**
@@ -413,6 +486,11 @@ const KNOWN_KINDS: Record<MessageKind, true> = {
  */
 function isMessageKind(value: string): value is MessageKind {
   return Object.hasOwn(KNOWN_KINDS, value);
+}
+
+/** `Object.hasOwn` for the same reason as `isMessageKind`. */
+function isPadMode(value: string): value is PadMode {
+  return Object.hasOwn(KNOWN_PAD_MODES, value);
 }
 
 /**

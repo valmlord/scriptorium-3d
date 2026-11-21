@@ -1,4 +1,5 @@
 import type { Address, BookAddress } from '@core/address';
+import type { PadMode } from '@core/library';
 
 /**
  * The wire format between the worker client and the worker (SPEC §6).
@@ -9,20 +10,21 @@ import type { Address, BookAddress } from '@core/address';
  *
  * Two properties shape everything below.
  *
- * **One address per request.** A request names exactly one page, title or page
- * text. The shelf-level call that fans out over 32 titles belongs to the
- * client, not to the format: flying past a shelf must abandon the titles not
- * yet computed, and a batch message cannot express the cancellation of part of
- * itself without inventing a second addressing scheme inside the payload. One
- * address per request also means one `core` call per message, which is what
- * lets the worker's message loop yield between them — a worker that computes a
- * whole shelf in one blocking loop cannot read a cancellation at all.
+ * **One address per request.** A request names exactly one page, title, page
+ * text or search query. The shelf-level call that fans out over 32 titles
+ * belongs to the client, not to the format: flying past a shelf must abandon
+ * the titles not yet computed, and a batch message cannot express the
+ * cancellation of part of itself without inventing a second addressing scheme
+ * inside the payload. One address per request also means one `core` call per
+ * message, which is what lets the worker's message loop yield between them — a
+ * worker that computes a whole shelf in one blocking loop cannot read a
+ * cancellation at all.
  *
  * **Every message earns exactly one response.** Not zero, which leaves a
  * pending promise with nothing to settle it (ADR-0016), and not two, which
  * makes the client's bookkeeping ambiguous. Malformed payloads and cancelled
  * ids are answered rather than dropped, and that is the whole reason the
- * response union below is wider than the three results a caller actually wants.
+ * response union below is wider than the four results a caller actually wants.
  */
 
 /**
@@ -73,6 +75,21 @@ export interface LocateRequest {
 }
 
 /**
+ * Find a page that holds `query`, padded under `mode` (SPEC §5, ADR-0033).
+ *
+ * There is deliberately no `offset`. No caller chooses one, so the worker
+ * draws it from its own random source, and a payload that sends one is
+ * refused by name in `./handler.ts` rather than silently ignored: its sender
+ * believes the offset will be honoured.
+ */
+export interface SearchRequest {
+  kind: 'search';
+  id: RequestId;
+  query: string;
+  mode: PadMode;
+}
+
+/**
  * Abandon the request with this id.
  *
  * It names an id rather than an address because the client cancels what it
@@ -93,7 +110,8 @@ export interface CancelRequest {
 }
 
 /** A message that asks for work. */
-export type ProtocolRequest = PageRequest | TitleRequest | LocateRequest;
+export type ProtocolRequest =
+  PageRequest | TitleRequest | LocateRequest | SearchRequest;
 
 /** Everything the worker accepts. */
 export type ProtocolMessage = ProtocolRequest | CancelRequest;
@@ -127,6 +145,21 @@ export interface LocatedResponse {
   kind: 'located';
   id: RequestId;
   address: Address;
+}
+
+/**
+ * Where a `SearchRequest`'s query was placed: the address of the page, and the
+ * code-point index into it where the query starts.
+ *
+ * `offset` is narrowed by the client against the request it answers, not
+ * against the page alone: a query of `n` code points can only start at
+ * `0` to `PAGE_LENGTH - n` (`takeFound` in `./client.ts`).
+ */
+export interface FoundResponse {
+  kind: 'found';
+  id: RequestId;
+  address: Address;
+  offset: number;
 }
 
 /**
@@ -212,10 +245,12 @@ export interface FailedResponse {
  * - `not-an-object` — `null`, `undefined`, a primitive or a function.
  * - `array-payload` — an array. An object by `typeof`, never a message.
  * - `missing-kind` — no `kind` property, or a `kind` that is not a string.
- * - `unknown-kind` — a string `kind` that names none of the four messages.
+ * - `unknown-kind` — a string `kind` that names none of the five messages.
  * - `invalid-id` — no `id`, or an `id` that is not an integer `>= 1`.
  * - `malformed-address` — the `address` or `book` is absent or misshapen.
  * - `malformed-page` — a `locate` whose `page` is absent or not a string.
+ * - `malformed-search` — a `search` whose `query` is not a string, or whose
+ *   `mode` names neither of the two pad modes.
  * - `unexpected-field` — a field the message must not carry, which means the
  *   sender has the wrong idea of what the message is.
  */
@@ -227,6 +262,7 @@ export type ProtocolFault =
   | 'invalid-id'
   | 'malformed-address'
   | 'malformed-page'
+  | 'malformed-search'
   | 'unexpected-field';
 
 /**
@@ -254,6 +290,7 @@ export type ProtocolResponse =
   | PageResponse
   | TitleResponse
   | LocatedResponse
+  | FoundResponse
   | CancelAckResponse
   | DroppedResponse
   | StaleResponse

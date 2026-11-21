@@ -1,3 +1,5 @@
+import { defaultRandomSource } from '@core/index';
+import type { RandomSource } from '@core/index';
 import { createProtocolHandlerState, handleProtocolMessage } from './handler';
 import type { ProtocolHandlerState } from './handler';
 import { WorkerScopeUnavailableError } from './errors';
@@ -184,6 +186,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 class QueuedMessageLoop implements WorkerLoop {
   private state: ProtocolHandlerState = createProtocolHandlerState();
 
+  /**
+   * The bytes a `search` is placed and padded with (ADR-0033).
+   *
+   * Owned here and handed to the handler, so that the handler stays a function
+   * of its arguments and its tests can pin the bytes. `core`'s default is
+   * `Math.random`-backed, and that is a choice rather than a constraint on this
+   * thread: these bytes choose which book a reader is shown, not a key, so
+   * being unpredictable to an attacker is not required of them (ADR-0011).
+   */
+  private readonly random: RandomSource = defaultRandomSource;
+
   /** Payloads accepted but not yet answered, in arrival order. */
   private readonly queue: unknown[] = [];
 
@@ -275,7 +288,7 @@ class QueuedMessageLoop implements WorkerLoop {
 
   /** One payload in, one response out, state carried forward. */
   private answer(payload: unknown): void {
-    const outcome = handleProtocolMessage(payload, this.state);
+    const outcome = handleProtocolMessage(payload, this.state, this.random);
     this.state = outcome.state;
     this.post(outcome.response);
   }
