@@ -171,11 +171,18 @@ export function isInAlphabet(alphabet: Alphabet, text: string): boolean {
 }
 
 /**
- * Normalize search input. NFC, then lower case, then collapse any whitespace
- * run to a single space. ё is preserved as itself — it is symbol 7, not a
- * variant of е. Unknown characters are reported, never substituted or
- * stripped: silently replacing them sends the user to a different book than
- * the one they asked for.
+ * Normalize search input. NFC, then lower case, and nothing else: ё is
+ * preserved as itself — it is symbol 7, not a variant of е. Unknown
+ * characters are reported, never substituted or stripped: silently replacing
+ * them sends the user to a different book than the one they asked for.
+ *
+ * That holds for whitespace too (ADR-0035). A space is symbol 0, so a run of
+ * U+0020 is kept exactly as typed, leading and trailing runs included:
+ * collapsing it would send most exact pages elsewhere, since 364 of 400
+ * measured pages contain a double space. Every other whitespace character —
+ * tab, line feed, carriage return, U+00A0 and the other Unicode spaces — is
+ * reported as unknown at its position rather than turned into a space, which
+ * would be the same substitution one character at a time.
  *
  * Uses `toLowerCase`, never `toLocaleLowerCase`: Turkish `I` alone would fork
  * the library for some users.
@@ -190,7 +197,6 @@ export function isInAlphabet(alphabet: Alphabet, text: string): boolean {
 export function normalize(input: string): NormalizationResult {
   const unknown: UnknownSymbol[] = [];
   let text = '';
-  let pendingSpace = false;
 
   // Walk the input in clusters: one base code point followed by any run of
   // combining marks (\p{M}). NFC composition only ever combines a base with
@@ -222,24 +228,13 @@ export function normalize(input: string): NormalizationResult {
   for (const cluster of clusters) {
     const folded = cluster.normalize('NFC').toLowerCase();
     for (const char of folded) {
-      if (/\s/.test(char)) {
-        pendingSpace = true;
+      if (PAGE_ALPHABET.digitBySymbol.has(char)) {
+        text += char;
       } else {
-        if (pendingSpace) {
-          text += ' ';
-          pendingSpace = false;
-        }
-        if (PAGE_ALPHABET.digitBySymbol.has(char)) {
-          text += char;
-        } else {
-          unknown.push({ symbol: char, index });
-        }
+        unknown.push({ symbol: char, index });
       }
     }
     index += Array.from(cluster).length;
-  }
-  if (pendingSpace) {
-    text += ' ';
   }
 
   return { text, unknown };

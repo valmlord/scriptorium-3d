@@ -2538,3 +2538,60 @@ answer would be a wrong one.
   a shelf the camera has left are cancelled.
 - The handler's header and ADR-0026's two sentences are the places this record changes; the second is
   amended here rather than edited in place, so ADR-0026 still reads as it was decided.
+
+---
+
+## ADR-0035 — Search input keeps runs of spaces as typed, and reports every other whitespace character
+
+**Decision.** Accepted. Search input keeps runs of U+0020 exactly as typed, and whitespace that is not
+U+0020 (tab, line feed, carriage return, U+00A0 and the other Unicode spaces) is not converted to a
+space: it is reported as unknown with its position, like any other symbol outside the alphabet. SPEC §2
+rule 4, which said that any whitespace run collapses to one space, now carries this sentence word for
+word.
+
+**Why a run of spaces is kept.** A space is symbol 0 (ADR-0001), so three spaces are three symbols of a
+page, exactly as three letters are. Collapsing them is a silent substitution, which rule 3 of the same
+list forbids for every other symbol because it sends the user to a different book than the one they
+asked for. The cost of the old rule was measured rather than argued: of 400 pages spread evenly over the
+library, 364 contain a double space, so only 36 of them, about 9%, survived `normalize` at 3200
+characters and could be found again by typing them in. That is what a uniform page predicts. The
+probability that 3200 symbols, each a space with probability 1/36, hold at least one double space is
+about 0.9097, computed exactly over two states (the last symbol a space or not); the independence
+estimate `1 - (1 - 1/1296)^3199`, about 0.915, overstates it slightly because overlapping pairs are not
+independent. A test that an exact page resolves to its own address could therefore pass under the old
+rule only on a page picked from the 9%, which is a test passing for the wrong reason.
+
+**Why other whitespace is reported, not converted.** Turning a tab, a line break or U+00A0 into a space
+is the same substitution one character at a time: the user typed a character the alphabet does not
+have and would be sent to the page holding a different one without being told. Reported at its
+position, it is handled as `x` or `!` is, and the caller decides what to do with it (rule 3). A page
+copied out of the reader has a line break between each of its 80 lines; under this rule those breaks are
+named where they are, rather than silently turned into spaces.
+
+**The format is untouched.** Normalization decides where a typed query is sent, not which text lives at
+which address. The alphabet order, `DOMAIN_TAG`, the rounds and the linearisation do not change, and no
+golden vector moves: the golden searches call `search` directly and never `normalize`, and `search`
+takes its query exactly as given (ADR-0011).
+
+**Alternatives rejected.**
+
+- _Keep rule 4 and test a page with no double space._ The test passes on the 9% of pages it was chosen
+  from and says nothing about the other 91%.
+- _Convert whitespace other than U+0020 to a space, without collapsing._ The same substitution, one
+  character at a time.
+- _Drop line breaks, so that a page copied out of the reader finds itself._ It joins the words on either
+  side of a break in any other pasted text. A copy that finds its own page is M8's clipboard to provide,
+  not the normalizer's.
+- _Trim leading and trailing spaces._ A space is symbol 0; a page that starts with one is a different
+  page from the one that does not.
+
+**Consequence.**
+
+- `normalize` has one branch for anything outside the alphabet, and whitespace other than U+0020 goes
+  through it. A lone tab therefore normalizes to empty text with one unknown symbol, so a caller that
+  asked whether the text is empty before it asked about unknowns would refuse a tab as an empty query. A
+  caller judges the unknowns first.
+- `normalize` is now the identity on every string over the alphabet, and `alphabet.test.ts` holds that
+  as a property. On the pinned seed it first meets a double space at case 40, so under Stryker's cap of 10
+  cases (ADR-0012) it stays green against a collapsing mutant, and the examples with runs of spaces are
+  what kill one.

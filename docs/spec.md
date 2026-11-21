@@ -41,8 +41,10 @@ All 33 Russian letters are present, `ё` and `ъ` included. Lower case only.
    silently converted; unknown characters are reported to the caller, which decides whether to reject the
    query or strip them. Silent substitution changes which book the user is sent to, so it never happens
    without telling them.
-4. Any whitespace run collapses to one space; `;` `:` `!` `?` `—` `-` and quotation marks are not in the
-   alphabet and count as unknown.
+4. Search input keeps runs of U+0020 exactly as typed, and whitespace that is not U+0020 (tab, line feed,
+   carriage return, U+00A0 and the other Unicode spaces) is not converted to a space: it is reported as
+   unknown with its position, like any other symbol outside the alphabet (ADR-0035). `;` `:` `!` `?` `—`
+   `-` and quotation marks are not in the alphabet and count as unknown.
 
 ---
 
