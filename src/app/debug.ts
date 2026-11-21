@@ -27,6 +27,28 @@ import { FrameTimingsUnavailableError } from './errors';
  * anything, which is the one failure mode a debug hook must not have.
  */
 
+/**
+ * What the renderer is holding on the device, and whether a replaced room is
+ * still being kept, for a test that looks for a leak across room changes.
+ */
+export interface MemorySnapshot {
+  /** Geometries uploaded and not yet released, from `renderer.info.memory`. */
+  readonly geometries: number;
+  /** Textures uploaded and not yet released, from `renderer.info.memory`. */
+  readonly textures: number;
+  /**
+   * Shader programs the renderer holds, from `renderer.info.programs`, or
+   * `null` while it has no program cache, which its constructor creates.
+   */
+  readonly programs: number | null;
+  /**
+   * Whether a replaced room is being kept for its shader programs
+   * (`@engine/retirement`). The counts above include it while it is, so a leak
+   * test compares them only once this is `false`.
+   */
+  readonly isRetiring: boolean;
+}
+
 /** What the hook answers. `docs/testing.md` §7 is the specification. */
 export interface DebugHook {
   /** The current node of the navigation machine. */
@@ -35,6 +57,8 @@ export interface DebugHook {
   address(): Address | null;
   /** The camera's numbers this frame. */
   rig(): CameraRigSnapshot;
+  /** What the device holds now. Draw calls are `e2e/webgl-probe.ts`'s, per frame. */
+  memory(): MemorySnapshot;
   /**
    * The rolling frame budget. M10 collects it; until then this throws
    * `FrameTimingsUnavailableError` rather than returning a shape full of
@@ -75,6 +99,7 @@ export function installDebugHook(target: DebugHookTarget, probes: DebugProbes): 
     state: () => probes.state(),
     address: () => probes.address(),
     rig: () => probes.rig(),
+    memory: () => probes.memory(),
     frames: () => {
       throw new FrameTimingsUnavailableError();
     },

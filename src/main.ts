@@ -174,6 +174,12 @@ if (import.meta.env.MODE !== 'production') {
     state: () => choreography.state,
     address: () => choreography.address,
     rig: () => choreography.rig(),
+    memory: () => ({
+      geometries: viewer.renderer.info.memory.geometries,
+      textures: viewer.renderer.info.memory.textures,
+      programs: viewer.renderer.info.programs?.length ?? null,
+      isRetiring: viewer.isRetiring,
+    }),
     waitForIdle: () =>
       whenAllIdle([
         choreography,

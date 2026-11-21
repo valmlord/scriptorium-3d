@@ -11,6 +11,7 @@ import {
 import type { CameraPose } from '@motion/rig';
 import { CAMERA_FAR, CAMERA_FOV, CAMERA_NEAR, applyRig } from './camera';
 import { ROOM_POSE } from './poses';
+import { createRetirement } from './retirement';
 import { createRoom } from './room';
 import type { RoomHandle } from './room';
 
@@ -36,6 +37,12 @@ import type { RoomHandle } from './room';
  * `docs/architecture.md` §1 going the wrong way. Without a frame source the
  * camera stands at the room's own vantage, which is what the M4 scenario in
  * `e2e/room.spec.ts` looks at.
+ *
+ * **Every render goes through `renderFrame()`**, whose whole body is the
+ * render and the report of it to the retirement policy (`./retirement.ts`).
+ * The report has to follow each render and nothing else, because it is what
+ * decides when a replaced room's shader programs may be released, and
+ * `__tests__/render-frame.test.ts` holds the function to exactly that shape.
  */
 
 /** The fog and the void outside the doorways are the same colour. */
@@ -70,13 +77,31 @@ export interface Viewer {
   readonly renderer: WebGLRenderer;
   /** The room currently loaded, or `null` before the first `loadRoom`. */
   readonly room: RoomHandle | null;
-  /** Unload the current room and load `room` in its place. */
+  /** Whether a replaced room is being kept for its shader programs, for the debug hook. */
+  readonly isRetiring: boolean;
+  /**
+   * Build `room` and put it on screen in place of the loaded one, which is
+   * `room` from the moment this returns.
+   *
+   * A room that cannot be built throws before anything changes, leaving the
+   * old one loaded. Otherwise the old room leaves the scene at once, so no
+   * frame draws two rooms or picks from the wrong one, and it is handed to the
+   * retirement policy rather than disposed: releasing it before the new room
+   * has rendered would free the shader programs the new room is about to use,
+   * and the swap frame would link them again. A room that has rendered with
+   * titles is kept until the loaded room has too, through any number of loads
+   * in between; one that has not is disposed after the next render, or at
+   * once when a titled room is already being kept (`./retirement.ts`).
+   */
   loadRoom(room: bigint): RoomHandle;
   /** Begin the one animation loop. */
   start(): void;
   /** Stop the loop, leaving the scene loaded. */
   stop(): void;
-  /** Stop the loop and release the room, the renderer and the resize listener. */
+  /**
+   * Stop the loop and release the retiring room, the loaded room, the
+   * renderer and the resize listener.
+   */
   dispose(): void;
 }
 
@@ -116,6 +141,7 @@ export function createViewer(
 
   let loaded: RoomHandle | null = null;
   let running = false;
+  const retirement = createRetirement();
 
   const resize = (): void => {
     const width = canvas.clientWidth || canvas.width;
@@ -136,11 +162,22 @@ export function createViewer(
       return loaded;
     },
 
+    get isRetiring(): boolean {
+      return retirement.isOccupied;
+    },
+
     loadRoom(room: bigint): RoomHandle {
       // Built before the old one is let go, so a room that cannot be built
       // leaves the reader looking at the one they were in.
       const next = createRoom(room);
-      unloadRoom();
+      // Out of the scene here and released by the policy through its own
+      // `dispose()`, which does not touch the scene: a room handed over while
+      // still in it would be drawn on top of the new one until its release.
+      const outgoing = loaded;
+      if (outgoing !== null) {
+        scene.remove(outgoing.group);
+      }
+      retirement.replace(outgoing);
       loaded = next;
       scene.add(next.group);
       return next;
@@ -157,7 +194,7 @@ export function createViewer(
       const { frame } = options;
       renderer.setAnimationLoop((time) => {
         applyRig(camera, frame?.(time / 1000) ?? ROOM_POSE);
-        renderer.render(scene, camera);
+        renderFrame();
       });
     },
 
@@ -169,10 +206,23 @@ export function createViewer(
     dispose(): void {
       viewer.stop();
       window.removeEventListener('resize', resize);
+      retirement.dispose();
       unloadRoom();
       renderer.dispose();
     },
   };
+
+  /**
+   * Draw the frame and tell the policy whether the loaded room drew with
+   * titles. Exactly these two statements: the report belongs after every
+   * render and nowhere else, and `__tests__/render-frame.test.ts` refuses any
+   * other shape. `loaded` is `null` only before the first `loadRoom`, when
+   * nothing is retiring.
+   */
+  function renderFrame(): void {
+    renderer.render(scene, camera);
+    if (loaded !== null) retirement.noteRender(loaded.titles.isTitled);
+  }
 
   function unloadRoom(): void {
     if (loaded === null) {

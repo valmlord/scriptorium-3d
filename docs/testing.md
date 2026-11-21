@@ -226,6 +226,7 @@ interface DebugHook {
   state(): NavigationState; // current FSM node
   address(): Address | null; // where the user is
   rig(): CameraRigSnapshot; // numeric camera state
+  memory(): MemorySnapshot; // what the device holds, and whether a room is retiring
   frames(): never; // M10's; refuses by name until then
   waitForIdle(): Promise<void>; // timelines settled, worker queue empty
 }
@@ -246,6 +247,14 @@ of guard this project keeps finding.
 until then the hook throws `FrameTimingsUnavailableError`, naming the milestone. A hook that
 answered with zeros would make §5's frame-budget assertion pass against a measurement nobody took —
 a debug hook that lies is worse than one that is absent.
+
+**`memory()` is for leaks across room changes.** It reads `renderer.info` when it is called:
+`geometries` and `textures` from `renderer.info.memory`, `programs` as the length of
+`renderer.info.programs`, and `isRetiring`, whether the viewer is keeping a replaced room for its
+shader programs (`src/engine/retirement.ts`). The counts include that room while it is kept, so a
+leak test compares them once `isRetiring` is `false`, and waits for that with `page.waitForFunction`
+rather than for a duration. Draw calls are not in it: `e2e/webgl-probe.ts` records them per frame,
+below three.js.
 
 **`waitForIdle()` is composed, not owned.** It resolves when every source of pending work the
 composition knows about is idle. In M5 that is the camera flight: the playhead has arrived at the

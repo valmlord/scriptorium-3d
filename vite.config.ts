@@ -68,7 +68,10 @@ export default defineConfig({
         'src/*/index.ts',
       ],
       // Glob-keyed thresholds; a matched file does not inherit global ones.
-      // engine/ and ui/ carry no threshold on purpose — they are covered by e2e.
+      // engine/ and ui/ are covered by e2e and carry no layer threshold on
+      // purpose. One module of engine/ has a floor of its own:
+      // `retirement.ts`, which decides when a replaced room is disposed, holds
+      // no three.js and is unit-tested whole, so it is kept at 100.
       //
       // app/ had none either, and that was an omission rather than a decision:
       // it is where the projections live, so M6 put the title resolver and the
@@ -83,6 +86,12 @@ export default defineConfig({
         'src/state/**': { lines: 90, branches: 90, functions: 90, statements: 90 },
         'src/app/**': { lines: 80, branches: 80, functions: 80, statements: 80 },
         'src/motion/**': { lines: 80, branches: 80, functions: 80, statements: 80 },
+        'src/engine/retirement.ts': {
+          lines: 100,
+          branches: 100,
+          functions: 100,
+          statements: 100,
+        },
       },
     },
   },
